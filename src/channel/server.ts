@@ -160,46 +160,81 @@ async function charStatus(accountId: number, magic = DEFAULT_MAGIC, unk = 0): Pr
 }
 
 /**
- * Soul Saver CHARSTATUS (op 0x09), from an official capture (2026-10-16):
- * 16-byte header (+12 = char count), 13 slots Ã— 120 bytes, 8-byte tail (char count u32, 1 u32).
+ * Soul Saver CHARSTATUS (op 0x09), from official captures (2026-10-16 proxy, 2026-10-17 pktmon):
+ * 16-byte header (+12 = char count), 13 slots × 120 bytes, 8-byte tail (always 1, 1  even with 2 chars).
  * Slot: name[20], title[20] ("Wanderer" for a new char), +40 slot-open flag (first 4 slots),
  * +41 sex, +42 level, +43 job, +44..+59 flags copied from the capture,
- * +60 equipment u32s in the Ghost Online order (weapon, armor, faceUpper, faceLower, hat, eye, clothes, cape, hair).
+ * +60 equipment u32s in the Ghost Online order (weapon, armor, faceUpper, faceLower, hat, eye, clothes, cape, hair),
+ * +104 base body, +108 1-based slot number, +112 1.
  */
 const SS_SLOTS = 13;
 const SS_SLOT_SIZE = 120;
 const SS_OPEN_SLOTS = 4;
+const SS_PAGE_SLOTS = 3;
 
-async function ssCharStatus(accountId: number, unk = 0): Promise<Buffer> {
+/** The 13 character-select slots of an account, as laid out in CHARSTATUS. */
+async function ssSlots(accountId: number): Promise<{ slots: Buffer; n: number }> {
   const chars = await query<RowDataPacket[]>(
     "SELECT ID, name, sex, level, job FROM characters WHERE userid = ? ORDER BY ID",
     [accountId],
   );
-  const total = 16 + SS_SLOTS * SS_SLOT_SIZE + 8;
-  const buf = Buffer.alloc(total, 0);
-  writeHeader(buf, 0x0009, total, DEFAULT_MAGIC, unk);
+  const slots = Buffer.alloc(SS_SLOTS * SS_SLOT_SIZE, 0);
   const n = Math.min(chars.length, SS_OPEN_SLOTS);
-  buf.writeUInt32LE(n, 12);
-  buf.writeUInt32LE(n, total - 8);
-  buf.writeUInt32LE(1, total - 4);
-  for (let i = 0; i < SS_OPEN_SLOTS; i++) buf.writeUInt8(1, 16 + i * SS_SLOT_SIZE + 40);
+  for (let i = 0; i < SS_OPEN_SLOTS; i++) slots.writeUInt8(1, i * SS_SLOT_SIZE + 40);
+  // +108 = 1-based slot number. The official server only fills it for used slots; empty slots get it here too:
+  // FUN_0131f5a0 matches it against the selected slot + 1 and clears a selection that points at an empty slot.
+  // Without that, the selection left over from the create screen (2) survived and Game Start read an empty name,
+  // so the client never sent the field login 0x18 ("Loading the field data" forever).
+  for (let i = 0; i < SS_SLOTS; i++) slots.writeUInt32LE(i + 1, i * SS_SLOT_SIZE + 108);
 
   const equips = await getEquippedBatch(chars.slice(0, n).map((c) => Number(c.ID)));
   for (let i = 0; i < n; i++) {
     const c = chars[i]!;
-    const base = 16 + i * SS_SLOT_SIZE;
-    writeCString(buf, base, String(c.name ?? ""), 20);
-    writeCString(buf, base + 20, "Wanderer", 20);
-    buf.writeUInt8(Number(c.sex ?? 0), base + 41);
-    buf.writeUInt8(Number(c.level ?? 1), base + 42);
-    buf.writeUInt8(Number(c.job ?? 0), base + 43);
-    Buffer.from("ff0000ff000001000100010001000000", "hex").copy(buf, base + 44);
+    const base = i * SS_SLOT_SIZE;
+    writeCString(slots, base, String(c.name ?? ""), 20);
+    writeCString(slots, base + 20, "Wanderer", 20);
+    slots.writeUInt8(Number(c.sex ?? 0), base + 41);
+    slots.writeUInt8(Number(c.level ?? 1), base + 42);
+    slots.writeUInt8(Number(c.job ?? 0), base + 43);
+    Buffer.from("ff0000ff000001000100010001000000", "hex").copy(slots, base + 44);
     const eq = equips.get(Number(c.ID)) ?? {};
-    [0, 1, 9, 12, 6, 8, 11, 4, 7].forEach((pos, k) => buf.writeUInt32LE(eq[pos] ?? 0, base + 60 + k * 4));
-    buf.writeUInt32LE(SS_DEFAULT_BODY, base + 104); // base body; 0 = invisible on select screen
-    buf.writeUInt32LE(1, base + 108);
-    buf.writeUInt32LE(1, base + 112);
+    [0, 1, 9, 12, 6, 8, 11, 4, 7].forEach((pos, k) => slots.writeUInt32LE(eq[pos] ?? 0, base + 60 + k * 4));
+    slots.writeUInt32LE(SS_DEFAULT_BODY, base + 104); // base body; 0 = invisible on select screen
+    slots.writeUInt32LE(1, base + 112);
   }
+  return { slots, n };
+}
+
+async function ssCharStatus(accountId: number, unk = 0): Promise<Buffer> {
+  const { slots, n } = await ssSlots(accountId);
+  const total = 16 + slots.length + 8;
+  const buf = Buffer.alloc(total, 0);
+  writeHeader(buf, 0x0009, total, DEFAULT_MAGIC, unk);
+  buf.writeUInt32LE(n, 12);
+  slots.copy(buf, 16);
+  buf.writeUInt32LE(1, total - 8);
+  buf.writeUInt32LE(1, total - 4);
+  return buf;
+}
+
+/**
+ * Character-select page (C 0x406 page u32 @12 ’ S 0x407, 384 bytes): char count of that page @12, the 3 slots of
+ * page p (slots 3(p-1)..3(p-1)+2, CHARSTATUS layout) @16, tail 1, 1. Sent after a character is created.
+ */
+async function ssCharPage(accountId: number, page: number, unk = 0): Promise<Buffer> {
+  const { slots } = await ssSlots(accountId);
+  const buf = Buffer.alloc(16 + SS_PAGE_SLOTS * SS_SLOT_SIZE + 8, 0);
+  writeHeader(buf, 0x0407, buf.length, DEFAULT_MAGIC, unk);
+  const first = (Math.max(1, page) - 1) * SS_PAGE_SLOTS;
+  let n = 0;
+  for (let i = 0; i < SS_PAGE_SLOTS && first + i < SS_SLOTS; i++) {
+    const src = slots.subarray((first + i) * SS_SLOT_SIZE, (first + i + 1) * SS_SLOT_SIZE);
+    src.copy(buf, 16 + i * SS_SLOT_SIZE);
+    if (src[41]) n++;
+  }
+  buf.writeUInt32LE(n, 12);
+  buf.writeUInt32LE(1, buf.length - 8);
+  buf.writeUInt32LE(1, buf.length - 4);
   return buf;
 }
 
@@ -319,6 +354,9 @@ async function handlePacket(client: Client, pkt: Buffer): Promise<void> {
       `[channel] CHARSTATUS sent account=${aid} magic=0x${client.magic.toString(16)} bytes=${list.length} head=${bufToHex(list.subarray(0, 16))}`,
     );
     logPkt("OUT", "channel CHARSTATUS", list);
+  } else if (op === 0x0406 && client.soulSaver) {
+    if (!client.accountId) return;
+    client.sock.write(await ssCharPage(client.accountId, pkt.length >= 16 ? pkt.readUInt32LE(12) : 1, client.unk));
   } else if (op === 0x000b && client.soulSaver) {
     // Soul Saver sends 0x0B (01 00 00 00 01 00 00 00) on the create screen; official server echoes it.
     client.sock.write(pkt);
@@ -327,7 +365,10 @@ async function handlePacket(client: Client, pkt: Buffer): Promise<void> {
     // Same layout as Ghost Online plus a u32 job at +52; official server answers with CHARSTATUS.
     const n = await createChar(client.accountId, pkt);
     if (n > 0 && pkt.length >= 56) {
-      await execute("UPDATE characters SET job = ? WHERE userid = ? AND name = ?", [
+      // New Soul Saver characters start in the tutorial map "YangakPost" (1/96) at 200,1400, as the official
+      // MAP_INFO 0x1C does (pktmon capture 2026-10-17). Its portal leads to Aeritown (1/97, 4400,850), where
+      // quest 1100 "New Beginning" starts at the Aeri Elder. Ghost default 2/6 is "NonData".
+      await execute("UPDATE characters SET job = ?, map = 1, region = 96, charX = 200, charY = 1400 WHERE userid = ? AND name = ?", [
         pkt.readUInt32LE(52),
         client.accountId,
         readCString(pkt, 12, 20),

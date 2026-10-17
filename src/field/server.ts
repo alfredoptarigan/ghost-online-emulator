@@ -1518,7 +1518,8 @@ function mapExists(map: number, region: number): boolean {
   for (const dir of dirs) {
     if (fs.existsSync(path.join(dir, name))) return true;
   }
-  return false;
+  // Soul Saver-only maps (e.g. tutorial 1/96) are missing from the Ghost client data but have emulator geometry.
+  return fs.existsSync(path.join(config.dataDir, "map_pexels", `t${Math.floor(map)}_s${Math.floor(region)}.pex`));
 }
 
 async function hurtPlayer(p: Player, dmg: number, reason = "hit"): Promise<void> {
