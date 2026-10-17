@@ -158,6 +158,7 @@ export async function buildQuestAll(cid: number, ss = false): Promise<Buffer> {
     if (slot >= 15) break;
     const st = Number(r.questState ?? 0x20);
     if (st === 0x20) continue;
+    if (ss && st !== 0x31) continue; // official: slots hold only active quests; done ones are in the state table
     b.writeUInt32LE(Number(r.completeMonster ?? 0), 12 + slot * 16);
     b.writeUInt16LE(Number(r.questId) & 0xffff, 24 + slot * 16);
     b.writeUInt8(1, 26 + slot * 16);
