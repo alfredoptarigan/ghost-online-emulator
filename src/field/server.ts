@@ -120,6 +120,7 @@ import {
   type Gift,
 } from "./giftbox.js";
 import { storeBuy } from "./npcstore.js";
+import { recomputeSsStats, isSsChar, ssExpForLevel, SS_STAT_POINTS_PER_LEVEL, SS_SKILL_POINTS_PER_LEVEL } from "./ssstats.js";
 import { buildQuickSlotAll, saveQuickSlot } from "./hotkeys.js";
 import {
   dispatchPShop,
@@ -1763,10 +1764,11 @@ function lvExpPacket(level: number, exp: number): Buffer {
   return b;
 }
 
-function levelUpPacket(charId: number): Buffer {
+function levelUpPacket(charId: number, level = 0): Buffer {
   const b = Buffer.alloc(42, 0);
   writeHeader(b, 0x005d, 42);
   b.writeUInt32LE(charId, 12);
+  b.writeUInt8(level & 0xff, 16); // Soul Saver reads the new level here (converted to 20 bytes in soulsaver.ts)
   return b;
 }
 
@@ -1790,18 +1792,29 @@ async function grantMonsterExp(p: Player, amount: number): Promise<boolean> {
   p.exp += Math.max(1, Math.floor(amount * mul));
   send(p, lvExpPacket(p.level, p.exp));
   let leveled = false;
+  const ss = await isSsChar(p.charId);
   while (p.exp >= p.mexp && p.mexp > 0) {
     p.exp -= p.mexp;
     p.level++;
-    p.mexp = Math.floor(p.mexp * rates.levelExpCurve);
-    if (p.mexp < 1) p.mexp = 30;
-    await execute(
-      "UPDATE characters SET st_point=st_point+5, sk_point=sk_point+2 WHERE ID=?",
-      [p.charId],
-    );
+    if (ss) {
+      // Soul Saver: tb_Exp curve, +4 stat / +2 skill points per level (official capture).
+      p.mexp = ssExpForLevel(p.level) || p.mexp;
+      await execute("UPDATE characters SET st_point=st_point+?, sk_point=sk_point+? WHERE ID=?", [
+        SS_STAT_POINTS_PER_LEVEL,
+        SS_SKILL_POINTS_PER_LEVEL,
+        p.charId,
+      ]);
+    } else {
+      p.mexp = Math.floor(p.mexp * rates.levelExpCurve);
+      if (p.mexp < 1) p.mexp = 30;
+      await execute(
+        "UPDATE characters SET st_point=st_point+5, sk_point=sk_point+2 WHERE ID=?",
+        [p.charId],
+      );
+    }
     leveled = true;
-    send(p, levelUpPacket(p.charId));
-    broadcastMap(p.map, p.region, levelUpPacket(p.charId), p.charId);
+    send(p, levelUpPacket(p.charId, p.level));
+    broadcastMap(p.map, p.region, levelUpPacket(p.charId, p.level), p.charId);
   }
   await execute("UPDATE characters SET exp=?, level=?, mexp=? WHERE ID=?", [
     p.exp,
@@ -1809,7 +1822,14 @@ async function grantMonsterExp(p: Player, amount: number): Promise<boolean> {
     p.mexp,
     p.charId,
   ]);
-  if (leveled) send(p, await charAll(p.charId));
+  if (leveled) {
+    if (ss && (await applySsStats(p))) {
+      p.hp = p.maxHp; // the official server refills HP/MP on level up (CHAR_ALL HP = max HP)
+      p.mp = p.maxMp;
+      await execute("UPDATE characters SET chp=?, cmp=? WHERE ID=?", [p.hp, p.mp, p.charId]);
+    }
+    send(p, await charAll(p.charId));
+  }
   return leveled;
 }
 
@@ -2037,11 +2057,11 @@ async function runGmCommand(p: Player, cmdRaw: string): Promise<void> {
       "UPDATE characters SET level=?, mexp=?, exp=0, st_point=st_point+?, sk_point=sk_point+? WHERE ID=?",
       [target, mexp, gained * 5, gained * 2, p.charId],
     );
-    send(p, levelUpPacket(p.charId));
+    send(p, levelUpPacket(p.charId, p.level));
     send(p, lvExpPacket(p.level, p.exp));
     send(p, await charAll(p.charId));
     send(p, await buildSkillAll(p.charId));
-    broadcastMap(p.map, p.region, levelUpPacket(p.charId), p.charId);
+    broadcastMap(p.map, p.region, levelUpPacket(p.charId, p.level), p.charId);
   } else if (c0 === "//levelup") {
     p.level++;
     p.mexp = Math.floor(p.mexp * rates.levelExpCurve);
@@ -2049,11 +2069,11 @@ async function runGmCommand(p: Player, cmdRaw: string): Promise<void> {
       "UPDATE characters SET level = ?, mexp = ?, st_point = st_point + 5, sk_point = sk_point + 2 WHERE ID = ?",
       [p.level, p.mexp, p.charId],
     );
-    send(p, levelUpPacket(p.charId));
+    send(p, levelUpPacket(p.charId, p.level));
     send(p, lvExpPacket(p.level, p.exp));
     send(p, await charAll(p.charId));
     send(p, await buildSkillAll(p.charId));
-    broadcastMap(p.map, p.region, levelUpPacket(p.charId), p.charId);
+    broadcastMap(p.map, p.region, levelUpPacket(p.charId, p.level), p.charId);
   } else if (c0 === "//warp" || c0 === "//gogo") {
     const arg1 = parts[1];
     if (arg1 !== undefined && arg1 !== "" && !/^-?\d+$/.test(arg1)) {
@@ -2359,6 +2379,18 @@ async function statUp(p: Player, which: number, ack = true): Promise<boolean> {
   if (!row) return false;
   const pts = Number(row.st_point ?? 0);
   if (pts < 1) return false;
+  if (await isSsChar(p.charId)) {
+    // Soul Saver: derived stats come from the job tables (ssstats.ts), so only the base stat changes here.
+    const col = ({ 1: "str", 2: "dex", 3: "vit", 4: "intel" } as Record<number, string>)[which];
+    if (!col) return false;
+    await execute(`UPDATE characters SET st_point=st_point-1, ${col}=${col}+1 WHERE ID=? AND st_point>0`, [p.charId]);
+    await applySsStats(p);
+    if (ack) {
+      send(p, await buildStatUpAck(p.charId));
+      sendVital(p);
+    }
+    return true;
+  }
 
   let str = Number(row.str ?? 3);
   let dex = Number(row.dex ?? 3);
@@ -2460,6 +2492,22 @@ async function autoStat(p: Player): Promise<void> {
   console.log(`[field] stat-auto char=${p.charId} job=${p.job} spent=${n}`);
 }
 
+/** Soul Saver characters: recompute HP/MP/attack/def from the client job tables and refresh the live player. */
+async function applySsStats(p: Player): Promise<boolean> {
+  const st = await recomputeSsStats(p.charId);
+  if (!st) return false;
+  p.maxHp = st.maxHp;
+  p.maxMp = st.maxMp;
+  p.hp = Math.min(p.hp, st.maxHp);
+  p.mp = Math.min(p.mp, st.maxMp);
+  p.minAtk = st.phyMin;
+  p.maxAtk = st.phyMax;
+  p.minMag = st.magMin;
+  p.maxMag = st.magMax;
+  p.def = st.def;
+  return true;
+}
+
 /** Put box rewards into the bags (tab from the gift table; 5 = pet) and announce each with S 0x2C6. */
 async function giveGifts(p: Player, gifts: Gift[]): Promise<boolean> {
   const magic = p.magic || 0x0037;
@@ -2519,6 +2567,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
           /* */
         }
       }
+      await recomputeSsStats(info.charId); // Soul Saver characters: stats from the client job tables
       const row = await loadCharRow(info.charId);
       if (!row) {
         console.log("[field] no character row", info.charId);
@@ -3275,6 +3324,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       `[field] CHANGEITEM char=${p.charId} ${srcBag}:${srcSlot} -> ${dstBag}:${dstSlot}`,
     );
     const res = await changeItem(p.charId, pkt, p.magic || 0x0037);
+    if (p.soulSaver && (await applySsStats(p))) res.packets.push(await charAll(p.charId)); // equipment stats
     // Pet moves: bag rearrange = PET5 only; equip/unequip = PET5 + EQUIP + SETAVATAR + PET_LIFE
     if (res.petRefresh && res.packets.length) {
       for (const out of res.packets) send(p, out);
@@ -3313,6 +3363,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
   if (op >= 0x007a && op <= 0x007f) {
     const qres = await handleQuestPacket(p.charId, p.level, op, pkt, p.soulSaver);
     for (const b of qres.packets) send(p, b);
+    const levelBefore = p.level;
     if (qres.refreshChar) {
       const row = await loadCharRow(p.charId);
       if (row) {
@@ -3325,6 +3376,11 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
         p.mp = Number(row.cmp ?? p.mp);
         p.maxHp = Number(row.cmhp ?? p.maxHp);
         p.maxMp = Number(row.cmmp ?? p.maxMp);
+      }
+      await applySsStats(p);
+      if (p.level > levelBefore) {
+        send(p, levelUpPacket(p.charId, p.level));
+        broadcastMap(p.map, p.region, levelUpPacket(p.charId, p.level), p.charId);
       }
       send(p, await charAll(p.charId));
       send(p, await buildSkillAll(p.charId));

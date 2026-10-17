@@ -28,8 +28,13 @@ function ssCharAll(g: Buffer): Buffer {
   s.writeUInt16LE(g.readUInt16LE(88), 0x6a); // soul
   g.copy(s, 0x6c, 90, 92);
   for (let i = 0; i < 4; i++) s.writeUInt16LE(g.readUInt16LE(92 + i * 2), 0x6e + i * 2); // STR DEX CON INT
-  for (let i = 0; i < 4; i++) s.writeUInt32LE(g.readUInt16LE(100 + i * 2), 0x78 + i * 4); // phys max/min, magic max/min
-  s.writeUInt32LE(g.readUInt16LE(108), 0x88); // defense
+  // phys max/min, magic max/min @0x78 (with weapon) and again @0x88 (official: without weapon; same values here),
+  // defense @0x98 (pktmon capture: 17 at 0x98; 0x88 is phys max again, so defense written there showed 0).
+  for (let i = 0; i < 4; i++) {
+    s.writeUInt32LE(g.readUInt16LE(100 + i * 2), 0x78 + i * 4);
+    s.writeUInt32LE(g.readUInt16LE(100 + i * 2), 0x88 + i * 4);
+  }
+  s.writeUInt32LE(g.readUInt16LE(108), 0x98); // defense
   s.writeUInt16LE(g.readUInt16LE(114), 0xa0); // stat points
   s.writeUInt16LE(g.readUInt16LE(116), 0xa2); // skill points
   for (let i = 0; i < 6; i++) s.writeUInt16LE(g.readUInt16LE(118 + i * 2), 0xa4 + i * 2); // bonus str..damw
@@ -270,7 +275,12 @@ function ssStatUp(g: Buffer): Buffer {
   s.writeUInt32LE(g.readUInt16LE(12), 0x0c);
   s.writeUInt32LE(g.readUInt16LE(14), 0x10);
   g.copy(s, 0x14, 16, 24); // STR DEX CON INT
-  for (let i = 0; i < 5; i++) s.writeUInt32LE(g.readUInt16LE(24 + 2 * i), 0x1c + 4 * i); // dmg x4, def
+  // dmg x4 @0x1c and again @0x2c (official: without weapon), defense @0x3c (pktmon capture).
+  for (let i = 0; i < 4; i++) {
+    s.writeUInt32LE(g.readUInt16LE(24 + 2 * i), 0x1c + 4 * i);
+    s.writeUInt32LE(g.readUInt16LE(24 + 2 * i), 0x2c + 4 * i);
+  }
+  s.writeUInt32LE(g.readUInt16LE(32), 0x3c);
   s.writeUInt16LE(g.readUInt16LE(38), 0x44);
   s.writeUInt16LE(g.readUInt16LE(40), 0x46);
   g.copy(s, 0x48, 42, 54); // bonus str..damw
@@ -474,6 +484,15 @@ function enEquipBag(e: Buffer, len: number): Buffer {
   return g;
 }
 
+/** LEVEL_UP 0x5D  20 bytes (pktmon capture): charId u32 @12, new level u8 @16, FF FF FF. */
+function ssLevelUp(g: Buffer): Buffer {
+  const s = Buffer.alloc(20, 0);
+  g.copy(s, 0, 0, 16);
+  s.writeUInt8(g.readUInt8(16), 16);
+  s.fill(0xff, 17, 20);
+  return s;
+}
+
 const converters: Record<number, { len: number; fn: (g: Buffer, charId: number) => Buffer }> = {
   0x50: { len: 132, fn: ssCharAll },
   0x1e: { len: 274, fn: ssEnterPlayer },
@@ -502,6 +521,7 @@ const converters: Record<number, { len: number; fn: (g: Buffer, charId: number) 
   0x17: { len: 120, fn: ssChat },
   // NOTICE: type @12, message @13 (up to 127 bytes); same as Game4 apart from the length.
   0x12: { len: 80, fn: ssPad(140) },
+  0x5d: { len: 42, fn: ssLevelUp },
   0xfb: { len: 0x124, fn: ssShout },
   0x93: { len: 16, fn: ssTradeResponse },
   0x9a: { len: 1180, fn: ssTradePut },

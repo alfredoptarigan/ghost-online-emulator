@@ -4,6 +4,7 @@ import type { RowDataPacket } from "mysql2";
 import { config } from "../config.js";
 import { query, execute, withConnection } from "../db.js";
 import { peelGame, opcodeOf, readCString, writeCString, writeHeader, logPkt, bufToHex } from "../net/packet.js";
+import { markSsChar, recomputeSsStats } from "../field/ssstats.js";
 import { decodePassword, isMd5Hex, passwordMatches } from "../login/passwordCodec.js";
 
 /** Game4 = 0x0105 (4 char slots / 368B); en-client = 0x0037 (2 slots / 192B). */
@@ -376,6 +377,19 @@ async function handlePacket(client: Client, pkt: Buffer): Promise<void> {
         client.accountId,
         readCString(pkt, 12, 20),
       ]);
+    }
+    if (n > 0) {
+      const made = await query<RowDataPacket[]>("SELECT ID FROM characters WHERE userid = ? AND name = ?", [
+        client.accountId,
+        readCString(pkt, 12, 20),
+      ]);
+      const cid = Number(made[0]?.ID ?? 0);
+      if (cid) {
+        // Soul Saver rules (tb_Exp curve, tb_JobBase stats); full HP/MP like the official lv1 CHAR_ALL.
+        await markSsChar(cid);
+        const st = await recomputeSsStats(cid);
+        if (st) await execute("UPDATE characters SET chp=?, cmp=? WHERE ID=?", [st.maxHp, st.maxMp, cid]);
+      }
     }
     console.log(`[channel] soulsaver create account=${client.accountId} chars=${n}`);
     client.sock.write(await ssCharStatus(client.accountId, client.unk));

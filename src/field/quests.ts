@@ -5,6 +5,7 @@ import { query, execute } from "../db.js";
 import { config, rates } from "../config.js";
 import { writeHeader } from "../net/packet.js";
 import { addItemToInventory, removeInvQty, refreshBagPackets } from "./inventory.js";
+import { isSsChar, recomputeSsStats, ssExpForLevel, SS_STAT_POINTS_PER_LEVEL, SS_SKILL_POINTS_PER_LEVEL } from "./ssstats.js";
 import { ensureBeginnerSkills, buildSkillAll } from "./skills.js";
 
 /** remote DB: quests(charid, questid, state, progress). Packets match legacy legacy quests. */
@@ -258,16 +259,29 @@ async function addExp(cid: number, amount: number): Promise<void> {
   let level = Number(rows[0]!.level ?? 1);
   let st = Number(rows[0]!.st_point ?? 0);
   let sk = Number(rows[0]!.sk_point ?? 0);
-  while (exp >= mexp && level < 99) {
+  const ss = await isSsChar(cid);
+  const startLevel = level;
+  while (exp >= mexp && level < (ss ? 200 : 99)) {
     exp -= mexp;
     level += 1;
-    st += 5;
-    sk += 1;
-    mexp = Math.floor(mexp * rates.questExpRate) + rates.questExpFlat;
+    if (ss) {
+      // Soul Saver: tb_Exp curve and +4/+2 points, so the starter quests level a new character as officially.
+      st += SS_STAT_POINTS_PER_LEVEL;
+      sk += SS_SKILL_POINTS_PER_LEVEL;
+      mexp = ssExpForLevel(level) || mexp;
+    } else {
+      st += 5;
+      sk += 1;
+      mexp = Math.floor(mexp * rates.questExpRate) + rates.questExpFlat;
+    }
   }
   await execute("UPDATE characters SET exp=?, mexp=?, level=?, st_point=?, sk_point=? WHERE ID=?", [
     exp, mexp, level, st, sk, cid,
   ]);
+  if (ss && level > startLevel) {
+    const st2 = await recomputeSsStats(cid);
+    if (st2) await execute("UPDATE characters SET chp=?, cmp=? WHERE ID=?", [st2.maxHp, st2.maxMp, cid]);
+  }
 }
 
 async function jobChange(cid: number, job: number): Promise<Buffer[]> {
