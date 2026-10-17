@@ -2,6 +2,7 @@ import type { RowDataPacket } from "mysql2";
 import { query, execute } from "../db.js";
 import { writeHeader, writeCString } from "../net/packet.js";
 import { ssWornExtra, type SsWornExtra } from "./soulsaver.js";
+import { remainingSeconds } from "./phantom.js";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
@@ -248,7 +249,7 @@ export async function buildOther4(charId: number, magic = 0x0037): Promise<Buffe
     } else {
       b.writeUInt16LE(Number(r.amount ?? 1) & 0xffff, 108 + 2 * slot);
       b.writeUInt8(Number(r.iscash ?? 0) & 0xff, 156 + slot);
-      b.writeInt32LE(Number(r.timeuse ?? 0), 180 + 4 * slot);
+      b.writeInt32LE(remainingSeconds(r), 180 + 4 * slot); // unsealed timed items count down
       b.writeUInt16LE(Number(r.isspecial ?? 0) & 0xffff, 278 + 2 * slot);
     }
   }

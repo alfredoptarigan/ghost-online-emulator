@@ -121,6 +121,7 @@ import {
   type Gift,
 } from "./giftbox.js";
 import { storeBuy } from "./npcstore.js";
+import { loadPhantoms, phantomMuls, unsealItem } from "./phantom.js";
 import { ssAttr, ssMaxLevel, ssSkill, ssSkillClients, ssSkillCost, ssSkillHeal, ssSyncJobSkills } from "./ssskills.js";
 import { beltAbsorb, beltCheckWorn, beltDecay, beltExpMul, beltPacket, beltReset } from "./belt.js";
 import { recomputeSsStats, refreshSsWeapon, isSsChar, ssExpForLevel, SS_STAT_POINTS_PER_LEVEL, SS_SKILL_POINTS_PER_LEVEL } from "./ssstats.js";
@@ -1836,7 +1837,7 @@ async function grantMonsterExp(p: Player, amount: number): Promise<boolean> {
   if (amount <= 0 || !p.loggedIn) return false;
   const startLevel = p.level;
   const buff = activeBuffOrNull(p.eventBuff);
-  const mul = buff?.expMul ?? 1;
+  const mul = (buff?.expMul ?? 1) * phantomMuls(p.charId).expMul;
   p.exp += Math.max(1, Math.floor(amount * mul));
   send(p, lvExpPacket(p.level, p.exp));
   let leveled = false;
@@ -2657,6 +2658,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       }
       await recomputeSsStats(info.charId); // Soul Saver characters: stats from the client job tables
       if (p.soulSaver) await refreshSsWeapon(info.charId); // CHAR_ALL weapon speed/range (fan basic attack)
+      await loadPhantoms(info.charId); // running Phantom bonuses; expired timed items are removed
       const row = await loadCharRow(info.charId);
       if (!row) {
         console.log("[field] no character row", info.charId);
@@ -3028,7 +3030,8 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
 
     const { dead, drops } = applyDamage(m, dmg, (() => {
       const buff = activeBuffOrNull(p.eventBuff);
-      return { dropMul: buff?.dropMul, goldMul: buff?.goldMul, ssSpirits: p.soulSaver };
+      const ph = phantomMuls(p.charId);
+      return { dropMul: (buff?.dropMul ?? 1) * ph.dropMul, goldMul: (buff?.goldMul ?? 1) * ph.goldMul, ssSpirits: p.soulSaver };
     })());
     if (dead) {
       m.state = 9;
@@ -3434,6 +3437,16 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     await execute("UPDATE characters SET money=? WHERE ID=?", [p.money, p.charId]);
     send(p, moneyPacket(p.money, gain));
     for (const pkt of await refreshBagPackets(p.charId, type, p.magic || 0x0037)) send(p, pkt);
+    return;
+  }
+
+  // Soul Saver C 0x137 = cancel the seal of a sealed item (u32 bag @12, u32 slot @16); official reply = bag packet.
+  if (op === 0x0137 && p.soulSaver) {
+    const bag = pkt.length >= 16 ? pkt.readUInt32LE(12) : -1;
+    const slot = pkt.length >= 20 ? pkt.readUInt32LE(16) : -1;
+    const res = await unsealItem(p.charId, bag, slot);
+    console.log(`[field] unseal char=${p.charId} bag=${bag} slot=${slot} ${res.ok ? `item=${res.itemId}` : res.reason}`);
+    if (res.ok) for (const out of await refreshBagPackets(p.charId, bag, p.magic || 0x0037)) send(p, out);
     return;
   }
 
