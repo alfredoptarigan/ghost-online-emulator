@@ -2,6 +2,9 @@ import type { RowDataPacket } from "mysql2";
 import { query, execute } from "../db.js";
 import { writeHeader, writeCString } from "../net/packet.js";
 import { ssWornExtra, type SsWornExtra } from "./soulsaver.js";
+import fs from "node:fs";
+import path from "node:path";
+import { config } from "../config.js";
 
 /** Bag slot used when pet was last equipped (legacy $PET_USESLOT) */
 const petUseSlots = new Map<number, number>();
@@ -37,6 +40,35 @@ export function invSlotsForMagic(magic: number): number {
 
 /** ItemId/100000 → bag: 0 worn unused, 1/2 equip bags, 3 spend, 4 other, 5 pet */
 export function getItemType(itemId: number): number {
+  const t = ghostItemType(itemId);
+  // Ids the Ghost patterns don't know (Soul Saver belts, gems, hair accessories, skins, minions, ...) used to fall
+  // into bag 1; take the client's own bag for them (1368 items + 282 without a bag field).
+  return t === 0 ? ssItemBag(itemId) : t;
+}
+
+/**
+ * Bag of every Soul Saver item from data/ss_items.json (item.itm, Game.exe FUN_015f8700). Sections without a bag
+ * there: 24 belt = 2 (tb_giftpocket gives belts tab 2), 26 jade ("an accessory") = 2, 20 minion = 4.
+ */
+let ssBags: Map<number, number> | null = null;
+const SS_SECTION_BAG: Record<number, number> = { 24: 2, 26: 2, 20: 4 };
+export function ssItemBag(itemId: number): number {
+  if (!ssBags) {
+    ssBags = new Map();
+    try {
+      const items = JSON.parse(fs.readFileSync(path.join(config.dataDir, "ss_items.json"), "utf8")).items ?? {};
+      for (const [id, it] of Object.entries<{ s?: number; bag?: number }>(items)) {
+        const bag = it.bag ?? SS_SECTION_BAG[it.s ?? -1];
+        if (bag) ssBags.set(Number(id), bag);
+      }
+    } catch {
+      console.warn("[inventory] data/ss_items.json missing: Soul Saver item bags unknown");
+    }
+  }
+  return ssBags.get(itemId) ?? 0;
+}
+
+function ghostItemType(itemId: number): number {
   const g = Math.floor(itemId / 100000);
   if ([79, 80, 81, 93, 95].includes(g)) return 1;
   if ([75, 82, 83, 84, 85, 86, 87, 94].includes(g)) return 2;
