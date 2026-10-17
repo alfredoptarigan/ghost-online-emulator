@@ -1,6 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import { query, execute } from "../db.js";
 import { writeHeader, writeCString } from "../net/packet.js";
+import { ssWornExtra, type SsWornExtra } from "./soulsaver.js";
 
 /** Bag slot used when pet was last equipped (legacy $PET_USESLOT) */
 const petUseSlots = new Map<number, number>();
@@ -66,8 +67,20 @@ export async function buildEquip(charId: number): Promise<Buffer> {
   const b = Buffer.alloc(458, 0);
   writeHeader(b, 0x0065, 458);
   const rows = await query<RowDataPacket[]>("SELECT * FROM equip WHERE charid=? AND pos1=0 ORDER BY pos2", [charId]);
+  const extra: SsWornExtra[] = [];
   for (const r of rows) {
     const slot = Number(r.pos2);
+    if (slot >= 16 && slot <= 24) {
+      // Soul Saver-only worn slots (belt @22, &): no room in the Game4 packet, the SS converter adds them.
+      extra.push({
+        slot,
+        itemId: Number(r.type),
+        slotByte: Number(r.slot ?? 0),
+        levels: [r.p_10, r.p_9, r.p_8, r.p_7, r.p_6, r.p_5, r.p_4, r.p_3, r.p_2, r.p_1].map((v) => Number(v ?? 0)),
+        soul: Number(r.soulperc ?? 0),
+      });
+      continue;
+    }
     if (slot < 0 || slot > 15) continue;
     b.writeUInt32LE(Number(r.type), 12 + 4 * slot);
     b.writeUInt8(Number(r.slot ?? 0) & 0xff, 80 + slot);
@@ -75,6 +88,7 @@ export async function buildEquip(charId: number): Promise<Buffer> {
     for (let k = 0; k < 10; k++) b.writeUInt8(Number(levels[k] ?? 0) & 0xff, 97 + slot * 10 + k);
     b.writeUInt16LE(Number(r.soulperc ?? 0) & 0xffff, 268 + 2 * slot);
   }
+  ssWornExtra.set(charId, extra);
   const pet = await query<RowDataPacket[]>("SELECT * FROM pets WHERE cid=? AND type=0 AND slot=10 LIMIT 1", [charId]);
   if (pet.length) {
     const p = pet[0];

@@ -112,12 +112,16 @@ function ssMonAll(g: Buffer): Buffer {
   return s;
 }
 
+/** Worn slots 16..24 (Soul Saver only, e.g. belt @22) per character, filled by buildEquip right before 0x65 is sent. */
+export type SsWornExtra = { slot: number; itemId: number; slotByte: number; levels: number[]; soul: number };
+export const ssWornExtra = new Map<number, SsWornExtra[]>();
+
 /**
  * Worn equipment 0x65 — parser FUN_01346800: 25 slots (Game4 16). Per slot: itemId u32 @0x0c+4i,
  * slot byte @0x70+i, 10 level bytes @0x89+10i, soul% u16 @0x184+2i. Worn pet (slot 10): name @0x5d0,
  * level @0x5e4, hp/mp/exp @0x5e8/0x5ec/0x5f0, use slot @0x5f4.
  */
-function ssEquip(g: Buffer): Buffer {
+function ssEquip(g: Buffer, charId: number): Buffer {
   const s = Buffer.alloc(2344, 0);
   g.copy(s, 0, 0, 12);
   for (let i = 0; i < 16; i++) {
@@ -125,6 +129,13 @@ function ssEquip(g: Buffer): Buffer {
     s.writeUInt8(g.readUInt8(80 + i), 0x70 + i);
     g.copy(s, 0x89 + 10 * i, 97 + 10 * i, 107 + 10 * i);
     s.writeUInt16LE(g.readUInt16LE(268 + 2 * i), 0x184 + 2 * i);
+  }
+  for (const e of ssWornExtra.get(charId) ?? []) {
+    if (e.slot < 16 || e.slot > 24) continue;
+    s.writeUInt32LE(e.itemId >>> 0, 0x0c + 4 * e.slot);
+    s.writeUInt8(e.slotByte & 0xff, 0x70 + e.slot);
+    e.levels.forEach((v, k) => s.writeUInt8(v & 0xff, 0x89 + 10 * e.slot + k));
+    s.writeUInt16LE(e.soul & 0xffff, 0x184 + 2 * e.slot);
   }
   g.copy(s, 0x5d0, 406, 425); // pet name
   s.writeUInt8(g.readUInt8(426), 0x5e4);
