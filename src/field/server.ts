@@ -111,6 +111,7 @@ import { buildMonsterBook, registerPiece } from "./monsterbook.js";
 import {
   NOVICE_GIFT,
   claimNoviceGift,
+  giftBoxLevel,
   giftGivenPacket,
   isGiftBox,
   openGiftBox,
@@ -118,6 +119,7 @@ import {
   selectBoxChoice,
   type Gift,
 } from "./giftbox.js";
+import { storeBuy } from "./npcstore.js";
 import { buildQuickSlotAll, saveQuickSlot } from "./hotkeys.js";
 import {
   dispatchPShop,
@@ -3379,6 +3381,11 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       }
     }
     if (p.soulSaver && isGiftBox(itemId)) {
+      const need = giftBoxLevel(itemId);
+      if (p.level < need) {
+        send(p, notice(`You must be level ${need} to open this.`, 3));
+        return;
+      }
       if (!(await removeInvQty(p.charId, 3, slot, 1))) return;
       for (const out of await refreshBagPackets(p.charId, 3, p.magic || 0x0037)) send(p, out);
       await giveGifts(p, openGiftBox(itemId));
@@ -3481,6 +3488,30 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     for (const out of await refreshBagPackets(p.charId, 3, p.magic || 0x0037)) send(p, out);
     await giveGifts(p, [choice]);
     send(p, selectBoxAckPacket(slot, true));
+    return;
+  }
+
+  // Soul Saver NPC shop buy: store list id u32 @12, store item id u32 @16, count u32 @20 ’ bag + MONEY 0x6B.
+  if (op === 0x03c5 && p.soulSaver && pkt.length >= 24) {
+    const buy = storeBuy(pkt.readUInt32LE(12), pkt.readUInt32LE(16), pkt.readUInt32LE(20));
+    if (!buy) {
+      console.log(`[shop] unsupported buy char=${p.charId} list=${pkt.readUInt32LE(12)} item=${pkt.readUInt32LE(16)}`);
+      return;
+    }
+    if (p.money < buy.total) {
+      send(p, notice("Not enough gold.", 3));
+      return;
+    }
+    const bag = await addItemToInventory(p.charId, buy.itemId, pkt.readUInt32LE(20), 0, -1, p.magic || 0x0037);
+    if (bag < 0) {
+      send(p, notice("Inventory is full.", 3));
+      return;
+    }
+    p.money -= buy.total;
+    await execute("UPDATE characters SET money=? WHERE ID=?", [p.money, p.charId]);
+    for (const out of await refreshBagPackets(p.charId, bag, p.magic || 0x0037)) send(p, out);
+    send(p, moneyPacket(p.money, -buy.total));
+    console.log(`[shop] buy char=${p.charId} item=${buy.itemId} x${pkt.readUInt32LE(20)} -${buy.total} gold`);
     return;
   }
 

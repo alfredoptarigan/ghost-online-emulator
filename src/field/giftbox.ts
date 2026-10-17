@@ -34,6 +34,20 @@ function tables() {
   return data!;
 }
 
+let itemLevels: Record<string, { useLv?: number }> | null = null;
+
+/** Level needed to open a box (data/ss_items.json useLv; Novice Gift chain 1, 10, 20, 30, 40, 60, 80, 110). */
+export function giftBoxLevel(itemId: number): number {
+  if (!itemLevels) {
+    try {
+      itemLevels = JSON.parse(fs.readFileSync(path.join(config.dataDir, "ss_items.json"), "utf8")).items ?? {};
+    } catch {
+      itemLevels = {};
+    }
+  }
+  return itemLevels![itemId]?.useLv ?? 0;
+}
+
 export function isGiftBox(itemId: number): boolean {
   return !!tables().pockets[itemId];
 }
