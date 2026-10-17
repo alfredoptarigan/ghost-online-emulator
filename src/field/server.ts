@@ -2603,7 +2603,9 @@ async function giveGifts(p: Player, gifts: Gift[]): Promise<boolean> {
     const bag =
       g.tab === 5 || isPetItem(g.itemId)
         ? await addPetToBag(p.charId, g.itemId, "Pet", 0, magic)
-        : await addItemToInventory(p.charId, g.itemId, g.count, 0, -1, magic, g.tab);
+        : g.limit
+          ? await addItemToInventory(p.charId, g.itemId, g.count, 1, g.limit, magic, g.tab, 1)
+          : await addItemToInventory(p.charId, g.itemId, g.count, 0, -1, magic, g.tab);
     if (bag < 0) {
       ok = false;
       send(p, notice("Inventory is full.", 3));

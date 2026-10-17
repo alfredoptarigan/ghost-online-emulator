@@ -374,13 +374,15 @@ export async function addItemToInventory(
   magic = 0x0037,
   /** Bag from a data table (Soul Saver eInvenNo 1..4) when the item id pattern does not tell it. */
   bagOverride = 0,
+  /** 1 = sealed (Soul Saver timed items: the effect starts when the seal is cancelled). */
+  special = 0,
 ): Promise<number> {
   let bag = bagOverride >= 1 && bagOverride <= 4 ? bagOverride : getItemType(itemId);
   if (bag === 0 || bag === 5) bag = 1;
   const amount = Math.max(1, qty);
   const maxSlots = invSlotsForMagic(magic);
 
-  if (bag === 3 || bag === 4) {
+  if ((bag === 3 || bag === 4) && !special) {
     const table = bag === 3 ? "spend" : "other";
     const col = bag === 3 ? "itemid" : "type";
     const exist = await query<RowDataPacket[]>(
@@ -417,15 +419,15 @@ export async function addItemToInventory(
     const m = await query<RowDataPacket[]>("SELECT COALESCE(MAX(spendid),0) AS m FROM spend");
     const id = Number(m[0]?.m ?? 0) + 1;
     await execute(
-      "INSERT INTO spend (spendid,itemid,charid,pos1,pos2,amount,iscash,timeuse,isspecial,per) VALUES (?,?,?,?,?,?,?,?,0,0)",
-      [id, itemId, charId, bag, slot, amount, isCash, term],
+      "INSERT INTO spend (spendid,itemid,charid,pos1,pos2,amount,iscash,timeuse,isspecial,per) VALUES (?,?,?,?,?,?,?,?,?,0)",
+      [id, itemId, charId, bag, slot, amount, isCash, term, special],
     );
   } else if (bag === 4) {
     const m = await query<RowDataPacket[]>("SELECT COALESCE(MAX(otherid),0) AS m FROM other");
     const id = Number(m[0]?.m ?? 0) + 1;
     await execute(
-      "INSERT INTO other (otherid,type,charid,pos1,pos2,amount,iscash,timeuse,isspecial) VALUES (?,?,?,?,?,?,?,?,0)",
-      [id, itemId, charId, bag, slot, amount, isCash, term],
+      "INSERT INTO other (otherid,type,charid,pos1,pos2,amount,iscash,timeuse,isspecial) VALUES (?,?,?,?,?,?,?,?,?)",
+      [id, itemId, charId, bag, slot, amount, isCash, term, special],
     );
   } else return -1;
   return bag;

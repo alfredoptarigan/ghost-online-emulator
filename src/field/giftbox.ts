@@ -52,7 +52,8 @@ export function isGiftBox(itemId: number): boolean {
   return !!tables().pockets[itemId];
 }
 
-export type Gift = { itemId: number; count: number; tab: number };
+/** limit = tb_giftpocket limitSeconds: the item arrives sealed with that duration (official 0x69: iscash 1, time, special 1). */
+export type Gift = { itemId: number; count: number; tab: number; limit?: number };
 
 /**
  * Contents of one box. Rows with rate 10000 or a negative rate are always given (the Novice Gift chain lists the
@@ -63,7 +64,7 @@ export function openGiftBox(itemId: number): Gift[] {
   const rows = tables().pockets[itemId] ?? [];
   const fixed = rows.filter((r) => r[3] === 10000 || r[3] < 0);
   const random = rows.filter((r) => !(r[3] === 10000 || r[3] < 0));
-  const out: Gift[] = fixed.map((r) => ({ itemId: r[0], count: r[1], tab: r[2] }));
+  const out: Gift[] = fixed.map((r) => ({ itemId: r[0], count: r[1], tab: r[2], limit: r[5] > 0 ? r[5] : 0 }));
   if (random.length) {
     let prev = 0;
     const weights = random.map((r) => {
@@ -76,7 +77,7 @@ export function openGiftBox(itemId: number): Gift[] {
     for (let i = 0; i < random.length; i++) {
       roll -= total ? weights[i]! : 1;
       if (roll < 0) {
-        out.push({ itemId: random[i]![0], count: random[i]![1], tab: random[i]![2] });
+        out.push({ itemId: random[i]![0], count: random[i]![1], tab: random[i]![2], limit: random[i]![5]! > 0 ? random[i]![5] : 0 });
         break;
       }
     }

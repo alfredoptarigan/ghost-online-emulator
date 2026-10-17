@@ -212,7 +212,8 @@ function ssOther(g: Buffer): Buffer {
     s.writeUInt32LE(g.readUInt32LE(12 + 4 * i), 0x0c + 4 * i);
     s.writeUInt16LE(g.readUInt16LE(108 + 2 * i), 0x12c + 2 * i);
     s.writeUInt8(g.readUInt8(156 + i), 0x1bc + i);
-    s.writeInt32LE(g.readInt32LE(180 + 4 * i), 0x204 + 4 * i);
+    // Official: time -1 on empty slots, seconds left on sealed timed items (with iscash 1, special 1).
+    s.writeInt32LE(g.readUInt32LE(12 + 4 * i) ? g.readInt32LE(180 + 4 * i) : -1, 0x204 + 4 * i);
     s.writeUInt16LE(g.readUInt16LE(278 + 2 * i), 0x324 + 2 * i);
   }
   return s;
