@@ -3280,6 +3280,19 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       sendVital(p);
       console.log(`[field] PLAYER_RESPAWN char=${p.charId} -> ${map}/1 @${x},${y}`);
     } else {
+      // Soul Saver NPC warps (Game.exe FUN_0124fc50 etc.): the client puts the gold fare at @20 and the NPC id at @24;
+      // map/region -1 means the server picks the destination (Netherworld gate), which is not mapped yet.
+      if (p.soulSaver && map === 0xffff) {
+        console.log(`[field] warp to server-chosen destination not supported char=${p.charId} npc=${pkt.readUInt32LE(24)}`);
+        return;
+      }
+      const fare = p.soulSaver && pkt.length >= 28 ? pkt.readUInt32LE(20) : 0;
+      if (fare > 0) {
+        if (p.money < fare) return;
+        p.money -= fare;
+        await execute("UPDATE characters SET money=? WHERE ID=?", [p.money, p.charId]);
+        send(p, moneyPacket(p.money, -fare));
+      }
       const pos = sanitizePlayerPos(map, region, x, y);
       if (pos.fixed) {
         console.log(`[field] warp void @0,0 -> ${map}/${region} @${pos.x},${pos.y}`);
