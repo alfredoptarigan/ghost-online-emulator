@@ -3071,6 +3071,9 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     // server-side aggro/touch damage (avoids double-hit).
     if (Date.now() - p.lastTouchAt < 800) return;
     let dmg = pkt.readUInt16LE(12);
+    // Soul Saver: the client rolls the hit itself and sends 0 for a dodge (UDP 0x2D damage -1 in the official
+    // capture). Falling back to the Ghost default of 15 on 0 killed a level-10 char that only saw "1" hits.
+    if (p.soulSaver && dmg === 0) return;
     if (!Number.isFinite(dmg) || dmg <= 0 || dmg >= 0xff00 || dmg > 500) dmg = 15;
     await hurtPlayer(p, dmg, "client-0x46");
     return;
