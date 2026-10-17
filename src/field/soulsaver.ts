@@ -615,6 +615,25 @@ function decryptBody(pkt: Buffer): Buffer {
 }
 
 /**
+ * WORKAROUND (Magic User basic attack): build the encrypted Soul Saver ATTACK 0x45 the client would send, so a
+ * server-side hit goes through the normal 0x45 path (fromSoulSaver + handler). Layout as decoded in fromSoulSaver:
+ * attack id u16 @0x10 (MON_ALL @1916 = slot + 1), damage u32 @0x14, hit x/y u16 @0x2c/@0x2e.
+ */
+export function ssAttackPacket(charId: number, attackId: number, damage: number, x: number, y: number): Buffer {
+  const b = Buffer.alloc(52, 0);
+  b.writeUInt16LE(0x0105, 0);
+  b.writeUInt16LE(0x0045, 2);
+  b.writeUInt16LE(52, 4);
+  b.writeUInt16LE((0x0105 + 0x45 + 52) & 0xffff, 6);
+  b.writeUInt32LE(charId >>> 0, 12);
+  b.writeUInt16LE(attackId & 0xffff, 0x10);
+  b.writeUInt32LE(damage >>> 0, 0x14);
+  b.writeUInt16LE(x & 0xffff, 0x2c);
+  b.writeUInt16LE(y & 0xffff, 0x2e);
+  return decryptBody(b); // the body XOR is symmetric: this encrypts it
+}
+
+/**
  * Decrypt and convert a Soul Saver client packet to the Game4 layout the handlers expect.
  * 0x45 ATTACK (52 B, built by FUN_01189660): target count u16 @0x0c, target attack id u16 @0x10 (MON_ALL
  * @1916, slot + 1), damage u32 @0x14, attack counter @0x24, hit x/y u16 @0x2c/0x2e → Game4 slot @14,

@@ -17,7 +17,7 @@ import {
 import { decodeFieldFrame, encodeFieldFrame, type FieldKeys } from "../net/fieldCodec.js";
 import { bumpOnline, setOnlineCount } from "../net/online.js";
 import { passwordMatches } from "../login/passwordCodec.js";
-import { fromSoulSaver, ssCharJob, ssInventoryAll, toSoulSaver } from "./soulsaver.js";
+import { fromSoulSaver, ssAttackPacket, ssCharJob, ssInventoryAll, toSoulSaver } from "./soulsaver.js";
 import {
   ensureBeginnerSkills,
   syncJobSkills,
@@ -2492,6 +2492,34 @@ async function autoStat(p: Player): Promise<void> {
   console.log(`[field] stat-auto char=${p.charId} job=${p.job} spent=${n}`);
 }
 
+/**
+ * WORKAROUND: the Soul Saver client never sends the hit (0x45) for the fan basic attack of a Magic User / Dark Mage
+ * on the emulator (sword basic attacks and skills do; cause still unknown, see SOULSAVER_RE_NOTES section 15). On
+ * their UDP 0x2B, hit the nearest live monster within reach on the server and feed a synthetic 0x45 through the
+ * normal attack path. Damage = the client roll in 0x2B +0x1C, capped at twice the max magic damage.
+ */
+const SS_FALLBACK_JOBS = new Set([3, 8]);
+function ssBasicAttackFallback(p: Player, msg: Buffer): void {
+  if (!SS_FALLBACK_JOBS.has(p.job) || msg.length < 0x20 || !p.loggedIn || !p.alive) return;
+  // The tutorial map turns everyone into a sword character whose basic attack already sends 0x45.
+  if (p.map === 1 && p.region === 96) return;
+  const now = Date.now();
+  let best: { slot: number; x: number; y: number; d: number } | null = null;
+  for (const m of monstersOnMap(p.map, p.region)) {
+    if (m.dead) continue;
+    const v = displayPos(m, now);
+    const dx = Math.abs(v.x - p.x);
+    if (dx > 350 || Math.abs(v.y - p.y) > 90) continue;
+    if (!best || dx < best.d) best = { slot: m.slot, x: v.x, y: v.y, d: dx };
+  }
+  if (!best) return;
+  const roll = msg.readUInt32LE(0x1c);
+  const cap = Math.max(1, p.maxMag * 2);
+  const dmg = roll > 0 && roll <= cap ? roll : Math.max(1, p.minMag);
+  const pkt = ssAttackPacket(p.charId, best.slot + 1, dmg, best.x, best.y);
+  p.pktChain = p.pktChain.then(() => handlePacket(p, pkt)).catch((e) => console.error("[field] fallback hit", e));
+}
+
 /** Soul Saver characters: recompute HP/MP/attack/def from the client job tables and refresh the live player. */
 async function applySsStats(p: Player): Promise<boolean> {
   const st = await recomputeSsStats(p.charId);
@@ -3690,6 +3718,7 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
     p.udpPort = rinfo.port;
     p.udpHost = rinfo.address;
     relayPeerAction(p, msg, op);
+    if (op === 0x2b && p.soulSaver) ssBasicAttackFallback(p, msg);
   });
   udp.bind(config.udpPort, config.fieldHost, () => {
     console.log(`[field-udp] ${config.fieldHost}:${config.udpPort}`);
