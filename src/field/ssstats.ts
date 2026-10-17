@@ -17,6 +17,7 @@ import path from "node:path";
 import type { RowDataPacket } from "mysql2";
 import { query, execute } from "../db.js";
 import { config } from "../config.js";
+import { ssWeaponAttack } from "./soulsaver.js";
 
 export const SS_STAT_POINTS_PER_LEVEL = 4;
 export const SS_SKILL_POINTS_PER_LEVEL = 2;
@@ -110,6 +111,14 @@ export function ssDerive(job: number, level: number, str: number, dex: number, c
     magMin: magBase - 2 + magAdd,
     def: Math.floor(con * c(b?.nStateConDef)) + defAdd,
   };
+}
+
+/** Basic-attack speed/range of the worn weapon (item f[8] / f[7]; melee weapons have range 0 → 1, as official). */
+export async function refreshSsWeapon(charId: number): Promise<void> {
+  const it0 = (items ??= load<ItemsTable>("ss_items.json", (j) => j.items ?? {}, {}));
+  const worn = await query<RowDataPacket[]>("SELECT type FROM equip WHERE charid=? AND pos1=0", [charId]);
+  const w = worn.map((r) => it0[Number(r.type)]).find((it) => it?.s === 1 && it.f);
+  ssWeaponAttack.set(charId, { speed: w?.f?.[8] || 1, range: w?.f?.[7] || 1 });
 }
 
 /** Recompute and store the derived stats of a Soul Saver character; null for other characters. */

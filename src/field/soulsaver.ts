@@ -10,8 +10,17 @@ import { getTrade } from "./trade.js";
 /** Base body item (client builds its own preview ENTERPLAYER with this at +0x84). */
 export const SS_DEFAULT_BODY = 9000006;
 
+/**
+ * Basic-attack numbers of the worn weapon per character (item f[8] speed, f[7] range; set by refreshSsWeapon).
+ * The client keeps them at skill manager +0x508/+0x518 (CHAR_ALL +0x9c/+0x9d, STAT_UP +0x40/+0x41). On Space
+ * the player's +0x1868 = range: auto-target reach is range*50 px and the fan projectile (effect 1463) lives
+ * range*50-50, so range 0 left the Magic User attack without target or projectile and no hit 0x45 was sent.
+ * Official: TrainingFan 3/4, TrainingSword 3/1.
+ */
+export const ssWeaponAttack = new Map<number, { speed: number; range: number }>();
+
 /** CHAR_ALL 0x50 — parser FUN_01343790. */
-function ssCharAll(g: Buffer): Buffer {
+function ssCharAll(g: Buffer, charId: number): Buffer {
   const s = Buffer.alloc(216, 0);
   g.copy(s, 0, 0, 12);
   g.copy(s, 0x0c, 12, 12 + 19); // name[20]
@@ -35,6 +44,10 @@ function ssCharAll(g: Buffer): Buffer {
     s.writeUInt32LE(g.readUInt16LE(100 + i * 2), 0x88 + i * 4);
   }
   s.writeUInt32LE(g.readUInt16LE(108), 0x98); // defense
+  const wa = ssWeaponAttack.get(charId) ?? { speed: 1, range: 1 };
+  s.writeUInt8(wa.speed, 0x9c);
+  s.writeUInt8(wa.range, 0x9d);
+  s.writeUInt8(5, 0x9e); // official: always 5
   s.writeUInt16LE(g.readUInt16LE(114), 0xa0); // stat points
   s.writeUInt16LE(g.readUInt16LE(116), 0xa2); // skill points
   for (let i = 0; i < 6; i++) s.writeUInt16LE(g.readUInt16LE(118 + i * 2), 0xa4 + i * 2); // bonus str..damw
@@ -309,10 +322,10 @@ function ssMoney(g: Buffer): Buffer {
 
 /**
  * STAT_UP_ACK 0x60 — FUN_01345fd0 (92 bytes), same field order as the CHAR_ALL stat block: max HP/MP
- * u32 @0x0c/0x10, STR..INT u16 @0x14, damage u32 @0x1c..0x28, def u32 @0x2c, stat/skill points
- * @0x44/0x46, bonus str..damw @0x48..0x52, bonus def @0x56.
+ * u32 @0x0c/0x10, STR..INT u16 @0x14, damage u32 @0x1c..0x28, def u32 @0x2c, weapon speed/range @0x40/0x41
+ * (see ssWeaponAttack), stat/skill points @0x44/0x46, bonus str..damw @0x48..0x52, bonus def @0x56.
  */
-function ssStatUp(g: Buffer): Buffer {
+function ssStatUp(g: Buffer, charId: number): Buffer {
   const s = Buffer.alloc(92, 0);
   g.copy(s, 0, 0, 12);
   s.writeUInt32LE(g.readUInt16LE(12), 0x0c);
@@ -324,6 +337,9 @@ function ssStatUp(g: Buffer): Buffer {
     s.writeUInt32LE(g.readUInt16LE(24 + 2 * i), 0x2c + 4 * i);
   }
   s.writeUInt32LE(g.readUInt16LE(32), 0x3c);
+  const wa = ssWeaponAttack.get(charId) ?? { speed: 1, range: 1 };
+  s.writeUInt8(wa.speed, 0x40);
+  s.writeUInt8(wa.range, 0x41);
   s.writeUInt16LE(g.readUInt16LE(38), 0x44);
   s.writeUInt16LE(g.readUInt16LE(40), 0x46);
   g.copy(s, 0x48, 42, 54); // bonus str..damw
@@ -612,25 +628,6 @@ function decryptBody(pkt: Buffer): Buffer {
   const key = ((b[8]! * 0x2137) ^ 0x7b21c3f4) >>> 0;
   for (let i = 0; i + 12 < b.length; i++) b[12 + i]! ^= ((key >>> (i % 4)) & 0xff) ^ ((i * 0x25) & 0xff);
   return b;
-}
-
-/**
- * WORKAROUND (Magic User basic attack): build the encrypted Soul Saver ATTACK 0x45 the client would send, so a
- * server-side hit goes through the normal 0x45 path (fromSoulSaver + handler). Layout as decoded in fromSoulSaver:
- * attack id u16 @0x10 (MON_ALL @1916 = slot + 1), damage u32 @0x14, hit x/y u16 @0x2c/@0x2e.
- */
-export function ssAttackPacket(charId: number, attackId: number, damage: number, x: number, y: number): Buffer {
-  const b = Buffer.alloc(52, 0);
-  b.writeUInt16LE(0x0105, 0);
-  b.writeUInt16LE(0x0045, 2);
-  b.writeUInt16LE(52, 4);
-  b.writeUInt16LE((0x0105 + 0x45 + 52) & 0xffff, 6);
-  b.writeUInt32LE(charId >>> 0, 12);
-  b.writeUInt16LE(attackId & 0xffff, 0x10);
-  b.writeUInt32LE(damage >>> 0, 0x14);
-  b.writeUInt16LE(x & 0xffff, 0x2c);
-  b.writeUInt16LE(y & 0xffff, 0x2e);
-  return decryptBody(b); // the body XOR is symmetric: this encrypts it
 }
 
 /**
