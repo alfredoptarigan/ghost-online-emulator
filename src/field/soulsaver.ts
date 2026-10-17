@@ -360,6 +360,10 @@ function ssMonInfo(g: Buffer): Buffer {
   s.writeUInt32LE(g.readUInt32LE(60), 0x3c);
   s.writeUInt32LE(g.readUInt32LE(60), 0x40);
   s.writeUInt8(g.readUInt16LE(54) & 0xff, 0x38);
+  // Official speed on hit (status 7) is always 5.0 and on death (9) 7.0, whatever the monster's walk speed.
+  const st = g.readUInt32LE(12);
+  if (st === 7) s.writeFloatLE(5, 28);
+  else if (st === 9) s.writeFloatLE(7, 28);
   // Damage numbers are drawn at this world position; use the monster position (Game4 +32/+34).
   s.writeUInt16LE(g.readUInt16LE(32), 0x58);
   s.writeUInt16LE(g.readUInt16LE(34), 0x5a);

@@ -2928,7 +2928,11 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
 
     // On lethal hit, soft-align corpse X to hit spark only. Never take spark Y —
     // it is often airborne/underground and made loot rise from below the floor.
-    if (dmg >= m.hp && hitSparkX > 10 && hitSparkX < 20000 && Math.abs(hitSparkX - m.x) < 320) {
+    // Soul Saver: the spark is where the projectile/swing landed, often 100+ px in front of the monster, so the
+    // corpse jumped there (even immobile Killer Plants). Use the position the client is showing instead.
+    if (p.soulSaver) {
+      if (dmg >= m.hp) m.x = displayPos(m).x;
+    } else if (dmg >= m.hp && hitSparkX > 10 && hitSparkX < 20000 && Math.abs(hitSparkX - m.x) < 320) {
       m.x = hitSparkX;
     }
 
