@@ -121,6 +121,7 @@ import {
   type Gift,
 } from "./giftbox.js";
 import { storeBuy } from "./npcstore.js";
+import { ssAttr, ssMaxLevel, ssSkill, ssSkillClients, ssSkillCost, ssSkillHeal, ssSyncJobSkills } from "./ssskills.js";
 import { recomputeSsStats, refreshSsWeapon, isSsChar, ssExpForLevel, SS_STAT_POINTS_PER_LEVEL, SS_SKILL_POINTS_PER_LEVEL } from "./ssstats.js";
 import { buildQuickSlotAll, saveQuickSlot } from "./hotkeys.js";
 import {
@@ -1261,6 +1262,10 @@ async function handleUseSkill(p: Player, pkt: Buffer): Promise<void> {
   }
   const level = Math.max(1, sk.level || levelPkt || 1);
   const sid = sk.skillId;
+  if (p.soulSaver) {
+    await handleSsUseSkill(p, sid, level, type, slot, active);
+    return;
+  }
   console.log(
     `[field] use-skill char=${p.charId} skill=${sid} lv=${level} type=${type}/${slot} active=${active}`,
   );
@@ -1397,6 +1402,46 @@ async function handleUseSkill(p: Player, pkt: Buffer): Promise<void> {
       // Most combat skills only need peer anim (0x2E/0x31 already relayed). No server HP effect.
       break;
   }
+}
+
+/**
+ * Soul Saver C 0x76: costs and self heals from skill.skl (official: AirWalk lv1 -2 MP, WindPalm lv1 -3 MP, then S 0x51).
+ * Damage is rolled by the client and arrives as 0x45. Meditate (3) toggles: heal attr 2/3 every attr-19 seconds.
+ * Ghost's hardcoded effects (10104, 10309, ...) are other skills in Soul Saver and are not used here.
+ */
+async function handleSsUseSkill(p: Player, sid: number, level: number, type: number, slot: number, active: number): Promise<void> {
+  const lv = Math.min(ssMaxLevel(sid), Math.max(1, level));
+  console.log(`[field] ss-skill char=${p.charId} skill=${sid} ${ssSkill(sid)?.n ?? "?"} lv=${lv} book=${type}/${slot} active=${active}`);
+  if (sid === 3) {
+    clearSkillTimer(p, 3);
+    if ((active & 0xff) !== 1) return; // the u32 at +16 carries junk in its upper bytes on Soul Saver
+    const intervalMs = Math.max(1, ssAttr(3, 19, lv) || 8) * 1000;
+    const tick = async () => {
+      if (!p.loggedIn || !p.alive || !players.has(p.charId) || !p.skillTimers.has(3)) return;
+      const h = ssSkillHeal(3, lv, p.maxHp, p.maxMp);
+      const addHp = Math.min(h.hp, Math.max(0, p.maxHp - p.hp));
+      const addMp = Math.min(h.mp, Math.max(0, p.maxMp - p.mp));
+      if (addHp || addMp) {
+        p.hp += addHp;
+        p.mp += addMp;
+        await persistHpMp(p);
+      }
+    };
+    const iv = setInterval(() => void tick(), intervalMs);
+    p.skillTimers.set(3, iv);
+    return;
+  }
+  const cost = ssSkillCost(sid, lv, p.maxMp);
+  const heal = ssSkillSelfHeal(sid) ? ssSkillHeal(sid, lv, p.maxHp, p.maxMp) : { hp: 0, mp: 0 };
+  if (!cost.mp && !cost.hp && !heal.hp && !heal.mp) return;
+  p.mp = Math.min(p.maxMp, Math.max(0, p.mp - cost.mp) + heal.mp);
+  p.hp = Math.min(p.maxHp, Math.max(1, p.hp - cost.hp) + heal.hp);
+  await persistHpMp(p);
+}
+
+/** Heals apply to the caster for self-target skills (skill.skl target 0), e.g. Regenerate, SuperRecovery. */
+function ssSkillSelfHeal(sid: number): boolean {
+  return (ssSkill(sid)?.target ?? -1) === 0;
 }
 
 function playerDeadAck(p: Player): Buffer {
@@ -2195,6 +2240,12 @@ async function runGmCommand(p: Player, cmdRaw: string): Promise<void> {
     console.log(
       `[field] GM //faction char=${p.charId} job=${p.job} -> ${job2ClassName(p.job2)} faction=${path}`,
     );
+  } else if (c0 === "//skills" && p.soulSaver) {
+    // Soul Saver: all skills of the job (skill.skl owner job) and of the faction in job3 (1 Justice, 2 Chaos, 3).
+    const faction = p.job3 >= 1 && p.job3 <= 3 ? p.job3 : 0;
+    const n = await ssSyncJobSkills(p.charId, p.job, faction);
+    send(p, await buildSkillAll(p.charId));
+    console.log(`[field] GM //skills (Soul Saver) char=${p.charId} job=${p.job} faction=${faction} skills=${n}`);
   } else if (c0 === "//skills") {
     // Unlock all skills for current progression (1st + job2 path + Guild/faction)
     await syncJobSkills(p.charId, p.job, p.job2, p.job3);
@@ -2630,6 +2681,8 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       p.def = Number(row.def ?? 0);
       p.money = Number(row.money ?? 0);
       ssCharJob.set(info.charId, Number(row.job ?? 0));
+      if (p.soulSaver) ssSkillClients.add(info.charId);
+      else ssSkillClients.delete(info.charId);
       p.soul = Number(row.soul ?? 0);
       p.maxSoul = Math.max(1, Number(row.maxsoul ?? 100));
       if (p.soulSaver) {

@@ -1,6 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import { query, execute } from "../db.js";
 import { writeHeader } from "../net/packet.js";
+import { buildSsSkillAll, ssMaxAllSkills, ssSkillByBookSlot, ssSkillClients, ssSkillPointUp } from "./ssskills.js";
 
 /** Unset job2/job3 in DB — packet byte becomes 0xFF via u8(). */
 export const JOB_UNSET = -1;
@@ -195,6 +196,7 @@ export function maxSkillLevel(skillId: number): number {
 
 /** GM `//maxskills`: set every owned skill to its cap. */
 export async function maxAllSkills(charId: number): Promise<number> {
+  if (ssSkillClients.has(charId)) return ssMaxAllSkills(charId);
   const rows = await query<RowDataPacket[]>("SELECT id, skillid FROM skills WHERE charid=?", [charId]);
   let n = 0;
   for (const r of rows) {
@@ -254,6 +256,7 @@ function writeTypeShort(buf: Buffer, idsOff: number, lvOff: number, rows: RowDat
 }
 
 export async function buildSkillAll(charId: number): Promise<Buffer> {
+  if (ssSkillClients.has(charId)) return buildSsSkillAll(charId); // Soul Saver: 708-byte book from skill.skl
   const { t0, t1, t2, t3, t4 } = await skillsByType(charId);
   // C# SkillPacket.getSkillInfo body ends ~+216; keep legacy-proven total len 244.
   const buf = Buffer.alloc(244, 0);
@@ -297,6 +300,10 @@ export async function getSkillByTypeSlot(
   type: number,
   slot: number,
 ): Promise<{ skillId: number; level: number } | null> {
+  if (ssSkillClients.has(charId)) {
+    const r = await ssSkillByBookSlot(charId, type, slot);
+    return r ? { skillId: r.skillid, level: r.points } : null;
+  }
   if (type < 0 || type > 4) return null;
   const maxSlot = type === 3 ? 19 : 9;
   if (slot < 0 || slot > maxSlot) return null;
@@ -315,6 +322,7 @@ export async function getSkillByTypeSlot(
  * Type: 0 beginner, 1 1st-job, 2 2nd-job, 3 Guild/faction, 4 4th-job.
  */
 export async function skillPointUp(charId: number, type: number, slot: number): Promise<SkillUpResult> {
+  if (ssSkillClients.has(charId)) return ssSkillPointUp(charId, type, slot);
   const maxSlot = type === 3 ? 19 : 9;
   if (type < 0 || type > 4 || slot < 0 || slot > maxSlot) {
     return { ok: false, reason: `bad type/slot ${type}/${slot}` };
