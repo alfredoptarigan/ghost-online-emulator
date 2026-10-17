@@ -384,9 +384,30 @@ function ssLvExp(g: Buffer): Buffer {
  * free for all, so each recipient is told it owns the drop.
  */
 function ssDropSpawn(g: Buffer, charId: number): Buffer {
+  const itemId = g.readUInt32LE(16);
+  if (itemId >= 9900001 && itemId <= 9909998) return ssSpiritDrop(g, charId);
   const s = Buffer.alloc(28, 0);
   g.copy(s, 0, 0, 24);
   s.writeUInt32LE(charId >>> 0, 24);
+  return s;
+}
+
+/**
+ * Spirits as the official server sends them: DROP 0x4A (144 bytes, parser FUN_01272900), here with one slot.
+ * Seven slots: drop id u32 @0x0c+4i, item u32 @0x28+4i, x/y u16 @0x44+2i/@0x52+2i, owner charId @0x60,
+ * qty u32 @0x64+4i. 0x4A has the spirit branch (items 9900001..9909998: no gravity, own scale and lifetime);
+ * a spirit sent as 0x4E was created and removed again within one frame, so none ever showed.
+ */
+function ssSpiritDrop(g: Buffer, charId: number): Buffer {
+  const s = Buffer.alloc(144, 0);
+  g.copy(s, 0, 0, 12);
+  s.writeUInt16LE(0x4a, 2);
+  s.writeUInt32LE(g.readUInt32LE(12), 0x0c); // drop id (C 0x4C pickup)
+  s.writeUInt32LE(g.readUInt32LE(16), 0x28); // item
+  s.writeUInt16LE(g.readUInt16LE(20), 0x44); // x
+  s.writeUInt16LE(g.readUInt16LE(22), 0x52); // y
+  s.writeUInt32LE(charId >>> 0, 0x60); // owner: every recipient may pick it up (as for 0x4E)
+  s.writeUInt32LE(Math.max(1, g.readUInt32LE(28)), 0x64); // qty (official 1)
   return s;
 }
 

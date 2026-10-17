@@ -28,6 +28,7 @@ type RatesFile = {
   questExpRate?: number;
   questExpFlat?: number;
   dropRate?: number;
+  spiritRate?: number;
   goldRate?: number;
   monsterExpPerLevel?: number;
   goldMinPerLevel?: number;
@@ -77,6 +78,8 @@ export const rates = {
   questExpRate: rate("QUEST_EXP_RATE", fileRates.questExpRate, 1.2),
   questExpFlat: rate("QUEST_EXP_FLAT", fileRates.questExpFlat, 10),
   dropRate: rate("DROP_RATE", fileRates.dropRate, 1.0),
+  /** Extra multiplier on the soul/spirit drop chance only (testing: 100 = a spirit on almost every kill). */
+  spiritRate: rate("SPIRIT_RATE", fileRates.spiritRate, 1.0),
   goldRate: rate("GOLD_RATE", fileRates.goldRate, 1.0),
   monsterExpPerLevel: rate("MONSTER_EXP_PER_LEVEL", fileRates.monsterExpPerLevel, 12),
   goldMinPerLevel: rate("GOLD_MIN_PER_LEVEL", fileRates.goldMinPerLevel, 8),

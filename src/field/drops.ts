@@ -105,7 +105,7 @@ export function rollDrops(
   let rolledSoul = false;
   for (const r of applicable) {
     if (out.length >= rates.maxDropSlots) break;
-    const chance = Math.min(10000, r.chanceBps * dropMul);
+    const chance = Math.min(10000, r.chanceBps * dropMul * (r.kind === "soul" ? rates.spiritRate : 1));
     if (Math.random() * 10000 >= chance) continue;
     if (r.kind === "soul") {
       // One soul orb per kill; color chosen by level weights (not hard level gates).

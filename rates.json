@@ -4,6 +4,7 @@
   "questExpRate": 1.2,
   "questExpFlat": 10,
   "dropRate": 1.0,
+  "spiritRate": 100,
   "goldRate": 1.0,
   "monsterExpPerLevel": 12,
   "goldMinPerLevel": 8,
