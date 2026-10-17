@@ -122,6 +122,7 @@ import {
 } from "./giftbox.js";
 import { storeBuy } from "./npcstore.js";
 import { ssAttr, ssMaxLevel, ssSkill, ssSkillClients, ssSkillCost, ssSkillHeal, ssSyncJobSkills } from "./ssskills.js";
+import { beltAbsorb, beltCheckWorn, beltDecay, beltExpMul, beltPacket, beltReset } from "./belt.js";
 import { recomputeSsStats, refreshSsWeapon, isSsChar, ssExpForLevel, SS_STAT_POINTS_PER_LEVEL, SS_SKILL_POINTS_PER_LEVEL } from "./ssstats.js";
 import { buildQuickSlotAll, saveQuickSlot } from "./hotkeys.js";
 import {
@@ -2570,6 +2571,13 @@ async function ssLevelUpRewards(p: Player, fromLevel: number, toLevel: number): 
   await giveGifts(p, gifts);
 }
 
+/** Soul Saver belt: an absorbed spirit adds belt points (S 0x388 shows them as minutes). */
+async function ssBeltSpirit(p: Player): Promise<void> {
+  if (!p.soulSaver) return;
+  const n = await beltAbsorb(p.charId);
+  if (n !== null) send(p, beltPacket(n));
+}
+
 /** Soul Saver characters: recompute HP/MP/attack/def from the client job tables and refresh the live player. */
 async function applySsStats(p: Player): Promise<boolean> {
   const st = await recomputeSsStats(p.charId);
@@ -2769,6 +2777,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     // en-client: keep MAP_INFO early (before quests) — MAP last left some clients stuck loading.
     send(p, await charAll(p.charId));
     send(p, await buildSkillAll(p.charId));
+    beltReset(p.charId);
     send(p, mapInfo(p));
     send(p, await buildQuestAll(p.charId, p.soulSaver));
     if (p.soulSaver) send(p, await buildMonsterBook(p.charId));
@@ -3027,7 +3036,8 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       const recipients = partyShareRecipients(p);
       let anyPartyLevel = false;
       for (const pl of recipients) {
-        if (await grantMonsterExp(pl, killExp)) anyPartyLevel = true;
+        const beltMul = pl.soulSaver ? await beltExpMul(pl.charId, pl.level) : 1;
+        if (await grantMonsterExp(pl, Math.floor(killExp * beltMul))) anyPartyLevel = true;
       }
       if (anyPartyLevel) {
         const party = getParty(p.charId);
@@ -3126,6 +3136,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
         clearDrop(oid);
         broadcastMap(p.map, p.region, buildDropClear(p.charId, d));
         send(p, await buildEquip(p.charId));
+        await ssBeltSpirit(p);
         return;
       }
 
@@ -3151,6 +3162,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
         await execute("UPDATE characters SET soul=? WHERE ID=?", [p.soul, p.charId]);
       }
       sendVital(p);
+      await ssBeltSpirit(p);
       return;
     }
     const bag = isPetItem(d.itemId)
@@ -3438,6 +3450,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       await refreshSsWeapon(p.charId);
       await applySsStats(p);
       res.packets.push(await charAll(p.charId));
+      if (await beltCheckWorn(p.charId)) res.packets.push(beltPacket(0));
     }
     // Pet moves: bag rearrange = PET5 only; equip/unequip = PET5 + EQUIP + SETAVATAR + PET_LIFE
     if (res.petRefresh && res.packets.length) {
@@ -3715,6 +3728,14 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
   await loadPrices();
   await loadMonsters();
 
+  // Soul Saver belt: 1 point per minute.
+  setInterval(() => {
+    for (const { charId, points } of beltDecay()) {
+      const pl = players.get(charId);
+      if (pl?.soulSaver) send(pl, beltPacket(points));
+    }
+  }, 60_000);
+
   setInterval(() => {
     const now = Date.now();
     const activeMaps = new Set<string>();
@@ -3914,6 +3935,7 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
     });
 
     sock.on("close", () => {
+      beltReset(p.charId);
       if (p.loggedIn && p.charId) {
         const leftMap = p.map;
         const leftRegion = p.region;
