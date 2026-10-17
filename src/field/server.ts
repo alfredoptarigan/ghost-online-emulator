@@ -1537,6 +1537,8 @@ function mapExists(map: number, region: number): boolean {
 async function hurtPlayer(p: Player, dmg: number, reason = "hit"): Promise<void> {
   if (!p.alive) return;
   if (dmg <= 0) return;
+  // Official Soul Saver: the player takes no damage in the tutorial map (HP stayed full in the pktmon capture).
+  if (p.soulSaver && p.map === 1 && p.region === 96) return;
   if (Date.now() < p.touchGraceUntil) return;
   // VIT/def reduces incoming damage (soft floor of 1)
   const mitigated = Math.max(1, dmg - Math.floor((p.def | 0) / 5));
@@ -1577,6 +1579,8 @@ function tickMonsterTouch(): void {
   const now = Date.now();
   for (const p of players.values()) {
     if (!p.loggedIn || !p.alive || !p.fieldEntered) continue;
+    // Soul Saver reports touch damage itself with C 0x46 (pktmon capture); a server-side touch tick doubled it.
+    if (p.soulSaver) continue;
     if (now < p.touchGraceUntil) continue;
     if (now - p.lastTouchAt < rates.touchCooldownMs) continue;
     for (const m of monstersOnMap(p.map, p.region)) {

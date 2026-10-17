@@ -1,6 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { RowDataPacket } from "mysql2";
 import { query } from "../db.js";
-import { rates } from "../config.js";
+import { config, rates } from "../config.js";
 import { rollDrops, spawnDrop, buildDropSpawn, isSoulOrb, type GroundDrop } from "./drops.js";
 import {
   updateMonsterPosition,
@@ -235,8 +237,31 @@ const OFFICIAL_MON_STATS: Record<number, { level: number; atk1: number; atk2: nu
   1001001: { level: 10, atk1: 24, atk2: 89, crash: 18, def: 10, hp: 70 },
 };
 
-function statsForTemplate(template: number): { atk1: number; atk2: number; crash: number; def: number } {
+/** Client monster table zGsp/Chart/tb_Mob.tbl (data/ss_mobs.json, 288 monsters; matches the official MON_ALL). */
+type TbMob = { lv: number; exp: number; hp: number; atk1: number; atk2: number; crash: number; def: number };
+let tbMob: Record<string, TbMob> | null = null;
+function tbMobRow(template: number): TbMob | undefined {
+  if (!tbMob) {
+    try {
+      tbMob = JSON.parse(fs.readFileSync(path.join(config.dataDir, "ss_mobs.json"), "utf8")).mobs ?? {};
+    } catch {
+      tbMob = {};
+    }
+  }
+  const m = tbMob![template];
+  return m && m.hp != null ? m : undefined;
+}
+
+/** Official/client stats for a template: the captured table first, then tb_Mob. */
+function knownStats(template: number) {
   const off = OFFICIAL_MON_STATS[template];
+  if (off) return off;
+  const t = tbMobRow(template);
+  return t ? { level: t.lv, atk1: t.atk1, atk2: t.atk2, crash: t.crash, def: t.def, hp: t.hp, exp: t.exp } : undefined;
+}
+
+function statsForTemplate(template: number): { atk1: number; atk2: number; crash: number; def: number } {
+  const off = knownStats(template);
   if (off) return { atk1: off.atk1, atk2: off.atk2, crash: off.crash, def: off.def };
   const lv = levelFromTemplate(template);
   let atk1 = 8 + lv * 2;
@@ -286,7 +311,7 @@ export async function loadMonsters(): Promise<void> {
     const slot = Number(r.m_monsterid ?? 0);
     if (slot < 0 || slot > 49) continue;
     const template = Number(r.monsterid);
-    const official = OFFICIAL_MON_STATS[template];
+    const official = knownStats(template);
     const level = official?.level ?? levelFromTemplate(template);
     let hp = Number(r.health ?? 0);
     if (hp <= 0) hp = maxHpForLevel(level);
@@ -1006,6 +1031,8 @@ export function buildDropPackets(drops: GroundDrop[]): Buffer[] {
 export function monsterExp(m: Monster): number {
   // The official server gives no EXP for the tutorial monk (no LV_EXP 0x5B until the first quest).
   if (m.template === 1090023) return 0;
+  const tb = tbMobRow(m.template);
+  if (tb) return Math.max(1, Math.floor(tb.exp * rates.killExpRate));
   // Laidai/Big-eye early curve; else level * monsterExpPerLevel, then killExpRate
   let base: number;
   if (m.template === 1000101) base = 8 + Math.floor(Math.random() * 5);
