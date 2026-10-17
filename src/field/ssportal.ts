@@ -1,8 +1,8 @@
 /**
  * Soul Saver teleport items (item.itm use type 14). The item data has no destination, only the description
  * ("Sends you to Chaste Hall"), so the towns are matched by name to tb_Map (data/ss_maps.json maps) and the
- * landing spot is the worldmapdata.etb target X/Y of that map (columns K/L), or the middle of the map snapped to
- * the ground when the table has none. Which region of a multi-region town the official server uses is not known:
+ * landing spot is the client's NPC town-warp point (NPC_WARP), else the worldmapdata.etb target X/Y of that map
+ * (columns K/L), else the middle of the map snapped to the ground. Which region of a multi-region town the official server uses is not known:
  * the first town region is used.
  *   - Portals 8850021..8850171: fixed town.
  *   - ReturnScroll 8849003, TownScroll 8850011, CheerfulBlackNoodle 8890201: the town of the current world area
@@ -17,14 +17,14 @@ import { config } from "../config.js";
 import { mapWidthPx, snapMonsterY } from "./pex.js";
 
 const PORTALS: Record<number, [number, number]> = {
-  8850021: [1, 1], // ChasteHallPortal → ChasteHall
+  8850021: [1, 1], // ChasteHallPortal → ChasteHall (NPC warp 975,1480)
   8850031: [15, 1], // DragonCastlePortal → DragonCastle(E)
-  8850041: [10, 1], // DuskCastlePortal → DuskCastle(E)
+  8850041: [10, 3], // DuskCastlePortal → DuskCastle(S), the NPC warp town
   8850051: [25, 1], // HermitTownPortal → HermitTown(S)
   8850061: [16, 1], // LakePortal → NamelessLake
   8850071: [12, 1], // DragonTavernPortal → DragonTavern
   8850081: [42, 2], // HanyaPortal → Hanyaville(S)
-  8850091: [46, 1], // HauntvillePortal → Hauntville(N)
+  8850091: [46, 2], // HauntvillePortal → Hauntville(S), the NPC warp town
   8850101: [39, 1], // TavernConchPortal → TavernConch
   8850111: [50, 1], // ZephyrHallPortal → ZephyrHall(S)
   8850121: [53, 1], // EvergreenPalacePortal → EvergreenPalace(E)
@@ -34,19 +34,35 @@ const PORTALS: Record<number, [number, number]> = {
   8850171: [67, 1], // HangingGardenPortal → UpperHangingGarden
 };
 
+/**
+ * Town spawn points the client itself uses for the NPC town warps (C 0x85 built in Game.exe FUN_0124fc50 and its
+ * siblings, e.g. "[Chaste Hall]" = 1/1 @975,1480; decoded by another session, data/ss_npc_warps.json). Where the
+ * official server lands a portal item is not in the client; these are the best evidence and win over worldmapdata.
+ */
+const NPC_WARP: Record<string, [number, number]> = {
+  "1/1": [975, 1480],
+  "10/3": [1645, 870],
+  "12/1": [1040, 745],
+  "16/1": [1985, 1080],
+  "25/1": [3510, 1276],
+  "27/1": [2399, 1325],
+  "42/2": [1886, 610],
+  "46/2": [1400, 936],
+};
+
 /** Return-to-town items; the value says whether the item is spent. */
 const RETURNS: Record<number, boolean> = { 8849003: true, 8850011: true, 8890201: true, 8849036: false };
 
 /** Town of each worldmapdata world area (column C). */
 const AREA_TOWN: Record<number, [number, number]> = {
   0: [1, 1],
-  1: [10, 1],
+  1: [10, 3],
   2: [15, 1],
   5: [25, 1],
   6: [27, 1],
   7: [39, 1],
   8: [42, 2],
-  9: [46, 1],
+  9: [46, 2],
   10: [50, 1],
   12: [53, 1],
   13: [57, 1],
@@ -78,6 +94,8 @@ function worldmap() {
 
 /** Landing spot in a map: the world map target, or the middle of the map on the ground. */
 export function landingSpot(map: number, region: number): { x: number; y: number } {
+  const npc = NPC_WARP[`${map}/${region}`];
+  if (npc) return { x: npc[0], y: npc[1] };
   const t = worldmap().target.get(`${map}/${region}`);
   if (t) return { x: t[0], y: snapMonsterY(map, region, t[0], t[1]) };
   const x = Math.floor(mapWidthPx(map, region) / 2);
