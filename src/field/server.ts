@@ -17,7 +17,7 @@ import {
 import { decodeFieldFrame, encodeFieldFrame, type FieldKeys } from "../net/fieldCodec.js";
 import { bumpOnline, setOnlineCount } from "../net/online.js";
 import { passwordMatches } from "../login/passwordCodec.js";
-import { fromSoulSaver, toSoulSaver } from "./soulsaver.js";
+import { fromSoulSaver, ssCharJob, ssInventoryAll, toSoulSaver } from "./soulsaver.js";
 import {
   ensureBeginnerSkills,
   syncJobSkills,
@@ -2623,6 +2623,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       p.maxMag = Math.max(p.minMag, Number(row.maxdamw ?? 0));
       p.def = Number(row.def ?? 0);
       p.money = Number(row.money ?? 0);
+      ssCharJob.set(info.charId, Number(row.job ?? 0));
       p.soul = Number(row.soul ?? 0);
       p.maxSoul = Math.max(1, Number(row.maxsoul ?? 100));
       const u = await query<RowDataPacket[]>("SELECT gm FROM users WHERE accountid = ?", [p.accountId]);
@@ -2717,6 +2718,10 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     beginEnterTrace(p.charId, `0xDB map=${p.map}/${p.region} @${p.x},${p.y}`);
     p.touchGraceUntil = Date.now() + rates.touchGraceEnterMs;
     p.lastTouchAt = Date.now();
+    if (p.soulSaver) {
+      const worn = toSoulSaver(await buildEquip(p.charId), p.charId);
+      if (worn && worn.length === 2344) send(p, ssInventoryAll(worn));
+    }
     await sendBags(p);
     // Mall: push catalog BEFORE ENTERPLAYER so UI sync (map=77) sees filled lists — no 2nd 0x1E.
     if (isCashMall(p.map, p.region)) await sendCashCatalog(p);

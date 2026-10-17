@@ -63,7 +63,9 @@ function ssEnterPlayer(g: Buffer): Buffer {
   s.writeUInt8(g.readUInt32LE(140) & 0xff, 0x9c); // pet level
   g.copy(s, 0xa0, 144, 164); // pet hp, mp, exp, decoration, use slot
   // "show" flags: the client zeroes the matching avatar slot when these are 0.
-  for (const o of [0xd9, 0xda, 0xdb, 0xdc, 0xe0, 0x168, 0x169]) s.writeUInt8(1, o);
+  // Official ENTERPLAYER: all 8 flags 0xd9..0xe0 are 1. 0xdd..0xdf were 0 here, which hid avatar slots (the
+  // weapon among them: a Magic User basic attack then carried weapon type 0 and never hit).
+  for (const o of [0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf, 0xe0, 0x168, 0x169]) s.writeUInt8(1, o);
   g.copy(s, 0xe6, 206, 216); // peer ip bytes + udp port
   return s;
 }
@@ -116,6 +118,26 @@ function ssEquip(g: Buffer): Buffer {
   g.copy(s, 0x5e8, 428, 444); // pet hp, mp, exp, use slot
   g.copy(s, 0x848, 444, 452);
   s.writeInt32LE(-1, 0x850);
+  return s;
+}
+
+/**
+ * INVENTORY_ALL 0x64  parser FUN_01359b10 (23088 bytes), sent by the official server at login before the bags.
+ * The start (+0x0c .. +0x600: worn item ids, slot bytes, levels, soul%, options, worn pet) has the 0x65 layout;
+ * per-slot defaults moved elsewhere: u32 100 x 25 @0x4ab8, byte flags (FF = empty) @0x654 and @0x52a4..0x58ac.
+ * The bag sections stay empty here: the 0x66..0x6A bag packets that follow fill them.
+ * Without this packet the client knows the worn items for display only, and the basic attack of a Magic User
+ * (UDP 0x2B) never produced a hit (0x45). Built from the converted 0x65.
+ */
+export function ssInventoryAll(ss65: Buffer): Buffer {
+  const s = Buffer.alloc(23088, 0);
+  ss65.copy(s, 0, 0, 0x600);
+  s.writeUInt16LE(0x0064, 2);
+  s.writeUInt16LE(23088, 4);
+  s.writeUInt16LE((0x0064 + 23088 + s.readUInt16LE(0)) & 0xffff, 6);
+  s.fill(0xff, 0x654, 0x664);
+  for (let i = 0; i < 25; i++) s.writeUInt32LE(100, 0x4ab8 + 4 * i);
+  s.fill(0xff, 0x52a4, 0x58ac);
   return s;
 }
 
@@ -204,7 +226,7 @@ function ssSetAvatar(g: Buffer): Buffer {
   g.copy(s, 0x48, 60, 79); // pet name
   s.writeUInt8(g.readUInt32LE(80) & 0xff, 0x5c);
   g.copy(s, 0x60, 84, 104); // pet hp, mp, exp, decoration, use slot
-  for (const o of [0x99, 0x9a, 0x9b, 0x9c, 0xa0, 0xb2, 0xb3]) s.writeUInt8(1, o);
+  for (const o of [0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xb2, 0xb3, 0xb4]) s.writeUInt8(1, o); // official: 0x99..0xa0 and 0xb2..0xb4 = 1
   return s;
 }
 
@@ -213,8 +235,29 @@ function ssSetAvatar(g: Buffer): Buffer {
  * type1 @0x34 / @0x5c (20 slots), type2 @0x84 / @0x98, type3 u32 ids @0xac / @0xfc, type4 u32 @0x124 /
  * @0x14c. Later sections (@0x160..0x2c4) are Soul Saver-only and stay empty.
  */
-function ssSkillAll(g: Buffer): Buffer {
+/** 1st job of each logged-in Soul Saver character, for packets whose layout depends on the class. */
+export const ssCharJob = new Map<number, number>();
+
+/**
+ * Soul Saver-only SKILL_ALL sections (official capture, new Magic User): avatar skills 101/102/104 as u32 @0x160
+ * (levels @0x180) and 105 @0x194 (levels @0x1bc); the 6 basic-attack combo skills @0x218 (levels @0x240) 
+ * Magic User 3012..3017 (attack effects 1620 + 1622..1627). Without them the basic attack (UDP 0x2B) found no
+ * target and never sent a hit 0x45. Combo skills of the other classes are not captured yet.
+ */
+const SS_COMBO_SKILLS: Record<number, number[]> = { 3: [3012, 3013, 3014, 3015, 3016, 3017] };
+
+function ssSkillAll(g: Buffer, charId: number): Buffer {
   const s = Buffer.alloc(708, 0);
+  [101, 102, 104].forEach((id, i) => {
+    s.writeUInt32LE(id, 0x160 + 4 * i);
+    s.writeUInt8(1, 0x180 + i);
+  });
+  s.writeUInt32LE(105, 0x194);
+  s.writeUInt8(1, 0x1bc);
+  (SS_COMBO_SKILLS[ssCharJob.get(charId) ?? -1] ?? []).forEach((id, i) => {
+    s.writeUInt32LE(id, 0x218 + 4 * i);
+    s.writeUInt8(1, 0x240 + i);
+  });
   g.copy(s, 0, 0, 12);
   const short = (gi: number, gl: number, si: number, sl: number, n: number) => {
     for (let i = 0; i < n; i++) {
