@@ -174,8 +174,11 @@ const G4_BAG_SLOTS = 24;
  * u32 @0x0c+4i, slot byte @0x12c+i, 10 level bytes @0x174+10i, soul% u16 @0x444+2i, iscash @0x4d4+i.
  * The time/special arrays sit at different offsets in the two bags and stay 0.
  */
+/** Timed items of the equip bags per `${charId}:${bag}`, filled by buildEquipBag (full u32 time + special). */
+export const ssBagTimes = new Map<string, Array<{ slot: number; time: number; special: number }>>();
+
 function ssEquipBag(len: number) {
-  return (g: Buffer): Buffer => {
+  return (g: Buffer, charId: number): Buffer => {
     const s = Buffer.alloc(len, 0);
     g.copy(s, 0, 0, 12);
     for (let i = 0; i < G4_BAG_SLOTS; i++) {
@@ -184,6 +187,18 @@ function ssEquipBag(len: number) {
       g.copy(s, 0x174 + 10 * i, 132 + 10 * i, 142 + 10 * i);
       s.writeUInt16LE(g.readUInt16LE(372 + 2 * i), 0x444 + 2 * i);
       s.writeUInt8(g.readUInt8(420 + i), 0x4d4 + i);
+    }
+    // Official: 0x66 time u32 @0x51c, special u16 @0x63c; 0x67 special u16 @0x51c, time u32 @0xb4c.
+    const bag = len === 6636 ? 1 : 2;
+    for (const t of ssBagTimes.get(`${charId}:${bag}`) ?? []) {
+      if (t.slot < 0 || t.slot >= SS_BAG_SLOTS) continue;
+      if (bag === 1) {
+        s.writeInt32LE(t.time | 0, 0x51c + 4 * t.slot);
+        s.writeUInt16LE(t.special & 0xffff, 0x63c + 2 * t.slot);
+      } else {
+        s.writeUInt16LE(t.special & 0xffff, 0x51c + 2 * t.slot);
+        s.writeInt32LE(t.time | 0, 0xb4c + 4 * t.slot);
+      }
     }
     return s;
   };

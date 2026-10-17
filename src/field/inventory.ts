@@ -1,8 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import { query, execute } from "../db.js";
 import { writeHeader, writeCString } from "../net/packet.js";
-import { ssWornExtra, type SsWornExtra } from "./soulsaver.js";
-import { remainingSeconds } from "./phantom.js";
+import { ssWornExtra, ssBagTimes, type SsWornExtra } from "./soulsaver.js";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
@@ -161,6 +160,8 @@ async function buildEquipBag(charId: number, pos1: number, opcode: number, magic
     for (let s = 0; s < slots; s++) b.writeInt32LE(-1, offTime + 4 * s);
   }
   const rows = await query<RowDataPacket[]>("SELECT * FROM equip WHERE charid=? AND pos1=? ORDER BY pos2", [charId, pos1]);
+  // Soul Saver timed items: full u32 time and special flag (the Game4 bag only has a u16 time).
+  ssBagTimes.set(`${charId}:${pos1}`, rows.filter((r) => Number(r.isspecial ?? 0)).map((r) => ({ slot: Number(r.pos2), time: Number(r.timeuse ?? 0), special: Number(r.isspecial ?? 0) })));
   for (const r of rows) {
     const slot = Number(r.pos2);
     if (slot < 0 || slot >= slots) continue;
@@ -249,7 +250,7 @@ export async function buildOther4(charId: number, magic = 0x0037): Promise<Buffe
     } else {
       b.writeUInt16LE(Number(r.amount ?? 1) & 0xffff, 108 + 2 * slot);
       b.writeUInt8(Number(r.iscash ?? 0) & 0xff, 156 + slot);
-      b.writeInt32LE(remainingSeconds(r), 180 + 4 * slot); // unsealed timed items count down
+      b.writeInt32LE(Number(r.timeuse ?? 0), 180 + 4 * slot);
       b.writeUInt16LE(Number(r.isspecial ?? 0) & 0xffff, 278 + 2 * slot);
     }
   }

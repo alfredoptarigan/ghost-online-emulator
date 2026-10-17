@@ -1,8 +1,9 @@
 /**
  * Soul Saver sealed timed items (gift box rows with limitSeconds, e.g. SmallBluePhantom 432000 s).
- * Official other-bag packet 0x69 sends them with iscash 1, time = seconds, special 1 (sealed). Cancelling the seal
- * is C 0x137 (u32 bag @12, u32 slot @16; the official tutorial capture answers with the bag packet). From then on
- * the duration runs (other.expire_at) and Phantom items apply their bonus ("Applies immediately upon cancelling the
+ * Official bag packets: sealed = iscash 1 + time = duration seconds + special 1; after the unseal (C 0x137, u32 bag
+ * @12, u32 slot @16, answered with the bag packet) iscash 0 + time = absolute expiry (epoch seconds), special stays 1
+ * (official 0x66/0x67 tutorial capture). The iscash byte is what the client draws as the sealed frame. While the time
+ * runs, Phantom items apply their bonus ("Applies immediately upon cancelling the
  * seal"): Blue item drop, Green EXP, Red gold, Purple all three, +50% each (item.itm descriptions).
  */
 import type { RowDataPacket } from "mysql2";
@@ -34,17 +35,17 @@ async function ensureColumn(): Promise<void> {
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 
-/** Seconds left of an unsealed timed item (for the bag packet), or the stored value when it is not running. */
-export function remainingSeconds(row: RowDataPacket): number {
-  const exp = Number(row.expire_at ?? 0);
-  return exp > 0 ? Math.max(0, exp - nowSec()) : Number(row.timeuse ?? 0);
-}
+/** Values below this are durations (sealed); above it, absolute expiry times (unsealed). */
+const EPOCH_MIN = 1_000_000_000;
 
 /** Drop expired unsealed items and cache the Phantom bonuses still running. */
 export async function loadPhantoms(charId: number): Promise<void> {
   await ensureColumn();
   const now = nowSec();
   await execute("DELETE FROM other WHERE charid=? AND expire_at>0 AND expire_at<=?", [charId, now]);
+  for (const t of ["equip", "spend"]) {
+    await execute(`DELETE FROM ${t} WHERE charid=? AND isspecial=1 AND iscash=0 AND timeuse>? AND timeuse<=?`, [charId, EPOCH_MIN, now]);
+  }
   const rows = await query<RowDataPacket[]>("SELECT type, expire_at FROM other WHERE charid=? AND expire_at>?", [charId, now]);
   const muls = { ...NONE };
   let until = Infinity;
@@ -83,14 +84,16 @@ export async function unsealItem(charId: number, bag: number, slot: number): Pro
   const rows = await query<RowDataPacket[]>(`SELECT * FROM ${table} WHERE charid=? AND pos1=? AND pos2=? LIMIT 1`, [charId, bag, slot]);
   const r = rows[0];
   if (!r) return { ok: false, reason: `empty ${bag}/${slot}` };
-  if (Number(r.isspecial ?? 0) === 0) return { ok: false, reason: `not sealed ${bag}/${slot}` };
+  if (Number(r.iscash ?? 0) !== 1) return { ok: false, reason: `not sealed ${bag}/${slot}` };
   const itemId = Number(r[col]);
   const secs = Number(r.timeuse ?? 0);
   const idCol = table === "equip" ? "equipid" : table === "spend" ? "spendid" : "otherid";
-  if (table === "other" && secs > 0) {
-    await execute(`UPDATE other SET isspecial=0, expire_at=? WHERE ${idCol}=?`, [nowSec() + secs, r[idCol]]);
+  if (secs > 0 && secs < EPOCH_MIN) {
+    const until = nowSec() + secs;
+    await execute(`UPDATE ${table} SET iscash=0, timeuse=? WHERE ${idCol}=?`, [until, r[idCol]]);
+    if (table === "other") await execute("UPDATE other SET expire_at=? WHERE otherid=?", [until, r[idCol]]);
   } else {
-    await execute(`UPDATE ${table} SET isspecial=0 WHERE ${idCol}=?`, [r[idCol]]);
+    await execute(`UPDATE ${table} SET iscash=0 WHERE ${idCol}=?`, [r[idCol]]);
   }
   if (table === "other") await loadPhantoms(charId);
   return { ok: true, bag, itemId };
