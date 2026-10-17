@@ -368,7 +368,9 @@ async function handlePacket(client: Client, pkt: Buffer): Promise<void> {
       // New Soul Saver characters start in the tutorial map "YangakPost" (1/96) at 200,1400, as the official
       // MAP_INFO 0x1C does (pktmon capture 2026-10-17). Its portal leads to Aeritown (1/97, 4400,850), where
       // quest 1100 "New Beginning" starts at the Aeri Elder. Ghost default 2/6 is "NonData".
-      await execute("UPDATE characters SET job = ?, map = 1, region = 96, charX = 200, charY = 1400 WHERE userid = ? AND name = ?", [
+      // Soul Saver picks the class at creation, so caster classes attack with magic damage from level 1 (Ghost
+      // only got it at the level-10 job change). With mindamw/maxdamw 0 a Magic User hit for 0.
+      await execute("UPDATE characters SET job = ?, map = 1, region = 96, charX = 200, charY = 1400, mindamw = GREATEST(mindamw, 10), maxdamw = GREATEST(maxdamw, 10) WHERE userid = ? AND name = ?", [
         pkt.readUInt32LE(52),
         client.accountId,
         readCString(pkt, 12, 20),

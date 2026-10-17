@@ -221,7 +221,23 @@ function maxHpForLevel(level: number, boss = false): number {
   return hp;
 }
 
+/**
+ * Stats from the official Soul Saver MON_ALL 0x42 (pktmon capture 2026-10-17): level, atk1, atk2, crash (touch
+ * damage), def, max HP. Templates outside the 1LLLLxx pattern (e.g. the tutorial monk 1090023) would otherwise get
+ * level 900 from levelFromTemplate and kill a new character on touch.
+ */
+const OFFICIAL_MON_STATS: Record<number, { level: number; atk1: number; atk2: number; crash: number; def: number; hp: number }> = {
+  1090023: { level: 1, atk1: 1, atk2: 1, crash: 1, def: 0, hp: 100 }, // tutorial monk, YangakPost 1/96
+  1000101: { level: 1, atk1: 4, atk2: 6, crash: 4, def: 1, hp: 27 },
+  1000201: { level: 2, atk1: 6, atk2: 12, crash: 6, def: 1, hp: 33 },
+  1000501: { level: 5, atk1: 14, atk2: 24, crash: 10, def: 3, hp: 46 },
+  1000601: { level: 6, atk1: 14, atk2: 40, crash: 14, def: 4, hp: 50 },
+  1001001: { level: 10, atk1: 24, atk2: 89, crash: 18, def: 10, hp: 70 },
+};
+
 function statsForTemplate(template: number): { atk1: number; atk2: number; crash: number; def: number } {
+  const off = OFFICIAL_MON_STATS[template];
+  if (off) return { atk1: off.atk1, atk2: off.atk2, crash: off.crash, def: off.def };
   const lv = levelFromTemplate(template);
   let atk1 = 8 + lv * 2;
   let atk2 = 20 + lv * 3;
@@ -270,11 +286,13 @@ export async function loadMonsters(): Promise<void> {
     const slot = Number(r.m_monsterid ?? 0);
     if (slot < 0 || slot > 49) continue;
     const template = Number(r.monsterid);
-    const level = levelFromTemplate(template);
+    const official = OFFICIAL_MON_STATS[template];
+    const level = official?.level ?? levelFromTemplate(template);
     let hp = Number(r.health ?? 0);
     if (hp <= 0) hp = maxHpForLevel(level);
     const wiki = maxHpForLevel(level);
     if (hp < wiki / 2) hp = wiki;
+    if (official) hp = official.hp;
     const st = statsForTemplate(template);
     const map = Number(r.map);
     const region = Number(r.region);
@@ -986,6 +1004,8 @@ export function buildDropPackets(drops: GroundDrop[]): Buffer[] {
 }
 
 export function monsterExp(m: Monster): number {
+  // The official server gives no EXP for the tutorial monk (no LV_EXP 0x5B until the first quest).
+  if (m.template === 1090023) return 0;
   // Laidai/Big-eye early curve; else level * monsterExpPerLevel, then killExpRate
   let base: number;
   if (m.template === 1000101) base = 8 + Math.floor(Math.random() * 5);
