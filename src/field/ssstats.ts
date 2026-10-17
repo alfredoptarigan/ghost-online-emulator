@@ -128,8 +128,9 @@ export function ssDerive(
   let gHp = 0;
   let gMp = 0;
   for (let l = 1; l <= level; l++) {
-    let gc = 0;
-    for (const [cls, from] of growth) if (from < l) gc = cls;
+    // Official (capture day1_stage1): levels 10+ grow with the job row even without the Job Change quest.
+    let gc = l >= 10 && job > 0 ? 1 : 0;
+    for (const [cls, from] of growth) if (cls >= 2 && from < l) gc = cls;
     const row = rowOf(gc);
     gHp += row.nGlowthHP;
     gMp += row.nGlowthSP;
@@ -138,6 +139,8 @@ export function ssDerive(
   let phyAdd = 0;
   let magAdd = 0;
   let defAdd = 0;
+  let hpAdd = 0;
+  let mpAdd = 0;
   for (const id of worn) {
     const it = it0[id];
     if (!it?.f) continue;
@@ -146,12 +149,16 @@ export function ssDerive(
       magAdd += it.f[5] ?? 0;
     } else if (it.s === 2) {
       defAdd += it.f[4] ?? 0;
+    } else if (it.s === 9) {
+      // Hats: f[6] max HP, f[7] max MP (official capture day1_stage1: RedPolkaDotHat(F) 150/150 = +150 HP/MP).
+      hpAdd += it.f[6] ?? 0;
+      mpAdd += it.f[7] ?? 0;
     }
   }
   const magBase = 7 + Math.floor(int * c(b?.nStateIntAtt));
   return {
-    maxHp: 1 + Math.floor(con * c(b?.nStateConHP) + str * c(b?.nStateStrHP)) + Math.floor(gHp / 100),
-    maxMp: 1 + Math.floor(int * c(b?.nStateIntSP)) + Math.floor(gMp / 100),
+    maxHp: 1 + Math.floor(con * c(b?.nStateConHP) + str * c(b?.nStateStrHP)) + Math.floor(gHp / 100) + hpAdd,
+    maxMp: 1 + Math.floor(int * c(b?.nStateIntSP)) + Math.floor(gMp / 100) + mpAdd,
     phyMax: Math.floor(str * c(b?.nStateStrAtt)) + Math.floor(dex * c(b?.nStateDexMax)) + phyAdd,
     phyMin: Math.floor(str * c(b?.nStateStrAtt)) + Math.floor(dex * c(b?.nStateDexMin)) + phyAdd,
     magMax: magBase + magAdd,
@@ -184,8 +191,9 @@ export async function recomputeSsStats(charId: number): Promise<SsStats | null> 
     .split(",")
     .filter(Boolean)
     .map((x) => x.split(":").map(Number) as [number, number]);
-  const gc = ssGrowthClass(Number(r.ss_class ?? 0), faction);
-  if ((growth.at(-1)?.[0] ?? 0) !== gc) {
+  // Class 1 depends on the level only; the history keeps the levels where class 2+ (faction, 2nd job) began.
+  const gc = ssGrowthClass(Math.max(1, Number(r.ss_class ?? 0)), faction);
+  if (gc >= 2 && (growth.at(-1)?.[0] ?? 0) !== gc) {
     growth.push([gc, level]);
     await execute("UPDATE characters SET ss_growth=? WHERE ID=?", [growth.map((g) => g.join(":")).join(","), charId]);
   }
