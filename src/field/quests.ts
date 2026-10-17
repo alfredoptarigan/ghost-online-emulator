@@ -430,7 +430,9 @@ export async function handleQuestPacket(
     const stage = pkt.length >= 20 ? pkt.readUInt16LE(18) : 0;
     await execute("UPDATE quests SET progress=? WHERE charid=? AND questid=? AND state=49", [stage, cid, questId]);
     const row = await getRow(cid, questId);
-    if (!row) return { packets: [], refreshChar: false };
+    // Only answer for an active quest: the client sends 0x7D again when talking to the NPC after the turn-in,
+    // and a QUEST_UPDATE with state 1 re-opened the finished quest in the Quest Alert.
+    if (!row || Number(row.questState) !== 0x31) return { packets: [], refreshChar: false };
     return { packets: [questUpdate(Number(row.completeMonster), questId, 1, stage & 0xff)], refreshChar: false };
   }
   if (opcode === 0x007f) {
