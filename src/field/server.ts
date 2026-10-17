@@ -65,6 +65,7 @@ import {
   buildDropClear,
   spawnDrop,
   isSoulOrb,
+  SS_MAX_FURY,
   tickGroundDrops,
 } from "./drops.js";
 import {
@@ -2627,6 +2628,10 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       ssCharJob.set(info.charId, Number(row.job ?? 0));
       p.soul = Number(row.soul ?? 0);
       p.maxSoul = Math.max(1, Number(row.maxsoul ?? 100));
+      if (p.soulSaver) {
+        p.maxSoul = SS_MAX_FURY;
+        p.soul = Math.min(p.soul, SS_MAX_FURY);
+      }
       const u = await query<RowDataPacket[]>("SELECT gm FROM users WHERE accountid = ?", [p.accountId]);
       p.gm = Number(u[0]?.gm ?? 0);
       p.alive = p.hp > 1;
@@ -2929,7 +2934,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
 
     const { dead, drops } = applyDamage(m, dmg, (() => {
       const buff = activeBuffOrNull(p.eventBuff);
-      return buff ? { dropMul: buff.dropMul, goldMul: buff.goldMul } : undefined;
+      return { dropMul: buff?.dropMul, goldMul: buff?.goldMul, ssSpirits: p.soulSaver };
     })());
     if (dead) {
       m.state = 9;
@@ -3015,14 +3020,15 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     // 9900001 blue → +20% 鬼力(SP/MP), 9900002 green → +40% SP,
     // 9900003 red → fury/DP (characters.soul), 9900004 purple → worn Seal soulperc.
     if (isSoulOrb(d.itemId)) {
-      if (d.itemId === 9900004) {
+      if (d.itemId === 9900004 || d.itemId === 9900007) {
         // Purple → fill worn Seal (type group 85). Leave on ground if none worn.
         const seals = await query<RowDataPacket[]>(
           "SELECT pos2, soulperc FROM equip WHERE charid=? AND pos1=0 AND FLOOR(type/100000)=85",
           [p.charId],
         );
         if (!seals.length) return;
-        const add = Math.max(1, d.qty);
+        // Official: one purple spirit raised the Seal Box spirits (0x65 soul% @0x18e) from 0 to 2.
+        const add = p.soulSaver ? 2 : Math.max(1, d.qty);
         for (const s of seals) {
           const cur = Number(s.soulperc ?? 0);
           const next = Math.min(100, Math.max(0, cur + add));
@@ -3039,11 +3045,19 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
 
       clearDrop(oid);
       broadcastMap(p.map, p.region, buildDropClear(p.charId, d));
-      if (d.itemId === 9900001 || d.itemId === 9900002) {
-        const pct = d.itemId === 9900001 ? 0.2 : 0.4;
+      if (d.itemId === 9900001 || d.itemId === 9900002 || d.itemId === 9900005) {
+        const pct = d.itemId === 9900002 ? 0.4 : 0.2;
         const gain = Math.max(1, Math.floor(p.maxMp * pct));
         p.mp = Math.min(p.maxMp, p.mp + gain);
-        await execute("UPDATE characters SET cmp=? WHERE ID=?", [p.mp, p.charId]);
+        if (d.itemId === 9900005) p.hp = Math.min(p.maxHp, p.hp + Math.max(1, Math.floor(p.maxHp * pct)));
+        await execute("UPDATE characters SET chp=?, cmp=? WHERE ID=?", [p.hp, p.mp, p.charId]);
+      } else if (d.itemId === 9900006) {
+        p.soul = p.maxSoul; // yellow: Fury full
+        await execute("UPDATE characters SET soul=? WHERE ID=?", [p.soul, p.charId]);
+      } else if (p.soulSaver) {
+        // red: Fury +10% (amount not captured yet)
+        p.soul = Math.min(p.maxSoul, p.soul + Math.floor(p.maxSoul / 10));
+        await execute("UPDATE characters SET soul=? WHERE ID=?", [p.soul, p.charId]);
       } else {
         // 9900003 red → fury / DP
         if (p.maxSoul < 1) p.maxSoul = 100;

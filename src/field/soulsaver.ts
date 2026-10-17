@@ -33,8 +33,8 @@ function ssCharAll(g: Buffer, charId: number): Buffer {
   s.writeUInt32LE(g.readUInt32LE(68), 0x54); // max EXP (u64)
   s.writeUInt32LE(g.readUInt32LE(76), 0x5c); // EXP (u64)
   s.writeUInt32LE(g.readUInt16LE(84), 0x64); // reputation
-  s.writeUInt16LE(g.readUInt16LE(86), 0x68); // max soul
-  s.writeUInt16LE(g.readUInt16LE(88), 0x6a); // soul
+  s.writeUInt16LE(1200, 0x68); // max Fury (soul): always 1200 for Soul Saver characters (SS_MAX_FURY)
+  s.writeUInt16LE(Math.min(1200, g.readUInt16LE(88)), 0x6a); // Fury
   g.copy(s, 0x6c, 90, 92);
   for (let i = 0; i < 4; i++) s.writeUInt16LE(g.readUInt16LE(92 + i * 2), 0x6e + i * 2); // STR DEX CON INT
   // phys max/min, magic max/min @0x78 (with weapon) and again @0x88 (official: without weapon; same values here),

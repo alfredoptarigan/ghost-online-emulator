@@ -983,7 +983,7 @@ export function tickRespawns(now: number, activeMaps?: Set<string>): Monster[] {
 export function applyDamage(
   m: Monster,
   dmg: number,
-  dropExtras?: { dropMul?: number; goldMul?: number },
+  dropExtras?: { dropMul?: number; goldMul?: number; ssSpirits?: boolean },
 ): { dead: boolean; drops: GroundDrop[] } {
   m.hp = Math.max(0, m.hp - dmg);
   if (m.hp > 0) return { dead: false, drops: [] };

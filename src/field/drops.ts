@@ -54,6 +54,20 @@ export async function loadDropRules(): Promise<void> {
   console.log(`[drops] loaded ${rules.length} rules from DB`);
 }
 
+/**
+ * Soul Saver spirits (client sprite DP_soul.csp: 9900001 blue, 2 green, 3 red, 4 purple, 5 white, 6 yellow).
+ * Quest 1107 "Growing Strong (Spirits)": red restores Fury, blue/green MP, yellow fully restores Fury,
+ * white HP and MP, purple goes into the worn Seal Box. One spirit per kill, as in the Ghost table.
+ */
+function rollSsSpirit(): { itemId: number; qty: number } {
+  // blue, green, red, purple, white, yellow — white/yellow are the rare ones.
+  const w = [24, 18, 20, 24, 8, 6];
+  let r = Math.random() * w.reduce((a, b) => a + b, 0);
+  let idx = 0;
+  while (idx < w.length - 1 && (r -= w[idx]!) > 0) idx++;
+  return { itemId: 9900001 + idx, qty: 1 };
+}
+
 /** Pick soul color — all colors at every level (old table gated green/red/purple by lv). */
 function rollSoulColor(level: number): { itemId: number; qty: number } {
   // Weights: blue, green, red, purple — early maps used to be blue-only via drop table.
@@ -80,7 +94,7 @@ function rollSoulColor(level: number): { itemId: number; qty: number } {
 export function rollDrops(
   monsterId: number,
   level: number,
-  extras?: { dropMul?: number; goldMul?: number },
+  extras?: { dropMul?: number; goldMul?: number; ssSpirits?: boolean },
 ): { itemId: number; qty: number }[] {
   const out: { itemId: number; qty: number }[] = [];
   const applicable = rules.filter(
@@ -97,7 +111,7 @@ export function rollDrops(
       // One soul orb per kill; color chosen by level weights (not hard level gates).
       if (rolledSoul) continue;
       rolledSoul = true;
-      out.push(rollSoulColor(level));
+      out.push(extras?.ssSpirits ? rollSsSpirit() : rollSoulColor(level));
       continue;
     }
     let qty = r.minQty;
@@ -244,7 +258,10 @@ export function buildDropClear(pickerId: number, d: GroundDrop): Buffer {
   return b;
 }
 
-/** Ground soul orbs — Bahamut: blue/green/red/purple (9900001..4). */
+/** Ground soul orbs — Bahamut: blue/green/red/purple (9900001..4); Soul Saver adds white/yellow/dark (5..7). */
 export function isSoulOrb(itemId: number): boolean {
-  return itemId >= 9900001 && itemId <= 9900004;
+  return itemId >= 9900001 && itemId <= 9900007;
 }
+
+/** Soul Saver Fury (soul) maximum: CHAR_ALL +0x68 and HP/MP 0x51 +22 are always 1200 in official captures. */
+export const SS_MAX_FURY = 1200;
