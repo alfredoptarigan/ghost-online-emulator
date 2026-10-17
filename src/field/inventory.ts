@@ -326,8 +326,10 @@ export async function addItemToInventory(
   isCash = 0,
   term = -1,
   magic = 0x0037,
+  /** Bag from a data table (Soul Saver eInvenNo 1..4) when the item id pattern does not tell it. */
+  bagOverride = 0,
 ): Promise<number> {
-  let bag = getItemType(itemId);
+  let bag = bagOverride >= 1 && bagOverride <= 4 ? bagOverride : getItemType(itemId);
   if (bag === 0 || bag === 5) bag = 1;
   const amount = Math.max(1, qty);
   const maxSlots = invSlotsForMagic(magic);

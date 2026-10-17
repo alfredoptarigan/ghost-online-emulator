@@ -108,6 +108,16 @@ import {
 } from "./spend_boxes.js";
 import { handleQuestPacket, onMonsterKill, buildQuestAll } from "./quests.js";
 import { buildMonsterBook, registerPiece } from "./monsterbook.js";
+import {
+  NOVICE_GIFT,
+  claimNoviceGift,
+  giftGivenPacket,
+  isGiftBox,
+  openGiftBox,
+  selectBoxAckPacket,
+  selectBoxChoice,
+  type Gift,
+} from "./giftbox.js";
 import { buildQuickSlotAll, saveQuickSlot } from "./hotkeys.js";
 import {
   dispatchPShop,
@@ -2444,6 +2454,29 @@ async function autoStat(p: Player): Promise<void> {
   console.log(`[field] stat-auto char=${p.charId} job=${p.job} spent=${n}`);
 }
 
+/** Put box rewards into the bags (tab from the gift table; 5 = pet) and announce each with S 0x2C6. */
+async function giveGifts(p: Player, gifts: Gift[]): Promise<boolean> {
+  const magic = p.magic || 0x0037;
+  const bags = new Set<number>();
+  let ok = true;
+  for (const g of gifts) {
+    const bag =
+      g.tab === 5 || isPetItem(g.itemId)
+        ? await addPetToBag(p.charId, g.itemId, "Pet", 0, magic)
+        : await addItemToInventory(p.charId, g.itemId, g.count, 0, -1, magic, g.tab);
+    if (bag < 0) {
+      ok = false;
+      send(p, notice("Inventory is full.", 3));
+      continue;
+    }
+    bags.add(bag);
+    send(p, giftGivenPacket(g.itemId));
+  }
+  for (const bag of bags) for (const out of await refreshBagPackets(p.charId, bag, magic)) send(p, out);
+  console.log(`[gift] char=${p.charId} gave ${gifts.map((g) => `${g.itemId}x${g.count}`).join(",")}`);
+  return ok;
+}
+
 async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
   if (p.soulSaver) pkt = fromSoulSaver(pkt);
   const op = opcodeOf(pkt);
@@ -3345,6 +3378,12 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
         return;
       }
     }
+    if (p.soulSaver && isGiftBox(itemId)) {
+      if (!(await removeInvQty(p.charId, 3, slot, 1))) return;
+      for (const out of await refreshBagPackets(p.charId, 3, p.magic || 0x0037)) send(p, out);
+      await giveGifts(p, openGiftBox(itemId));
+      return;
+    }
     if (isEffectSpendItem(itemId)) {
       broadcastMap(p.map, p.region, useSpendStartPkt(p.charId, p.x, p.y, itemId, 3, slot));
     }
@@ -3417,6 +3456,31 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
   // USE_SKILL_REQ 0x76 â€” Meditate / buffs / HPâ†”MP (C# SkillHandler.UseSkill_Req)
   if (op === 0x0076) {
     await handleUseSkill(p, pkt);
+    return;
+  }
+
+  // Soul Saver Novice Gift (Aeri Elder "Challenge! Receive Gift"): C 0x1D9 u32 2 ’ item 8846411 once per character.
+  if (op === 0x01d9 && p.soulSaver) {
+    if (await claimNoviceGift(p.charId)) await giveGifts(p, [{ itemId: NOVICE_GIFT, count: 1, tab: 3 }]);
+    return;
+  }
+
+  // Soul Saver select box choice: spend slot u32 @12, choice index u32 @16, chosen item u32 @20 ’ S 0x2ED.
+  if (op === 0x02ef && p.soulSaver && pkt.length >= 24) {
+    const slot = pkt.readUInt32LE(12);
+    const chosen = pkt.readUInt32LE(20);
+    const rows = await query<RowDataPacket[]>("SELECT itemid FROM spend WHERE charid=? AND pos1=3 AND pos2=?", [
+      p.charId,
+      slot,
+    ]);
+    const choice = rows.length ? selectBoxChoice(Number(rows[0]!.itemid), chosen) : null;
+    if (!choice || !(await removeInvQty(p.charId, 3, slot, 1))) {
+      send(p, selectBoxAckPacket(slot, false));
+      return;
+    }
+    for (const out of await refreshBagPackets(p.charId, 3, p.magic || 0x0037)) send(p, out);
+    await giveGifts(p, [choice]);
+    send(p, selectBoxAckPacket(slot, true));
     return;
   }
 
