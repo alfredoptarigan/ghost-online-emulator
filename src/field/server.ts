@@ -2006,6 +2006,7 @@ async function runGmCommand(p: Player, cmdRaw: string): Promise<void> {
   } else if (c0 === "//heal") {
     p.hp = p.maxHp;
     p.mp = p.maxMp;
+    await execute("UPDATE characters SET chp=?, cmp=? WHERE ID=?", [p.hp, p.mp, p.charId]);
     sendVital(p);
   } else if (c0 === "//hp") {
     if (parts[1] !== undefined && parts[1] !== "") {
@@ -2019,6 +2020,8 @@ async function runGmCommand(p: Player, cmdRaw: string): Promise<void> {
       send(p, await charAll(p.charId));
     } else {
       p.hp = p.maxHp;
+      // Saved too: the warp reloads HP from the DB (it was still the 1 HP left after death).
+      await execute("UPDATE characters SET chp=? WHERE ID=?", [p.hp, p.charId]);
       sendVital(p);
     }
   } else if (c0 === "//mp") {
@@ -2033,6 +2036,7 @@ async function runGmCommand(p: Player, cmdRaw: string): Promise<void> {
       send(p, await charAll(p.charId));
     } else {
       p.mp = p.maxMp;
+      await execute("UPDATE characters SET cmp=? WHERE ID=?", [p.mp, p.charId]);
       sendVital(p);
     }
   } else if (c0 === "//money") {
@@ -3095,10 +3099,13 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       x = spawn.x;
       y = spawn.y;
       p.alive = true;
-      if (p.hp < 1) p.hp = 1;
-      if (p.mp < 1) p.mp = 1;
+      // Client death dialog "In town Resurrect": 70% HP and MP, EXP -2.0% (of the EXP needed for the level).
+      p.hp = Math.max(1, Math.floor(p.maxHp * 0.7));
+      p.mp = Math.max(1, Math.floor(p.maxMp * 0.7));
       if (p.maxSoul < 1) p.maxSoul = 100;
-      await execute("UPDATE characters SET chp=?, cmp=? WHERE ID=?", [p.hp, p.mp, p.charId]);
+      p.exp = Math.max(0, p.exp - Math.floor(p.mexp * 0.02));
+      await execute("UPDATE characters SET chp=?, cmp=?, exp=? WHERE ID=?", [p.hp, p.mp, p.exp, p.charId]);
+      send(p, lvExpPacket(p.level, p.exp));
       sendVital(p);
       console.log(`[field] PLAYER_RESPAWN char=${p.charId} -> ${map}/1 @${x},${y}`);
     } else {
