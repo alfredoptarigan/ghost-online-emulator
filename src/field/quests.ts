@@ -115,13 +115,16 @@ const SS_QUESTS: Record<number, SsQuest> = (() => {
 })();
 
 const isLegacy = (qid: number) => qid >= 2 && qid <= 51;
+/** Ghost tables for quests 2..51, unless a Soul Saver client has its own quest.luc entry (e.g. 45 Diablo Spear is
+ * lv10 there but lv12 in Ghost, and Ghost 16/19/21 change to Ghost jobs). */
+const useLegacy = (qid: number, ss: boolean) => isLegacy(qid) && !(ss && SS_QUESTS[qid] != null);
 
 function supported(qid: number): boolean {
   return isLegacy(qid) || SS_QUESTS[qid] != null;
 }
 
-function killGoal(qid: number): { template: number; count: number } | undefined {
-  if (isLegacy(qid)) return KILL_GOALS[qid];
+function killGoal(qid: number, ss = false): { template: number; count: number } | undefined {
+  if (useLegacy(qid, ss)) return KILL_GOALS[qid];
   const k = SS_QUESTS[qid]?.kill?.[0];
   return k ? { template: k[0], count: k[1] } : undefined;
 }
@@ -309,8 +312,8 @@ async function applySsRewards(cid: number, q: SsQuest): Promise<Buffer[]> {
   return out;
 }
 
-async function applyRewards(cid: number, questId: number): Promise<Buffer[]> {
-  if (!isLegacy(questId)) return applySsRewards(cid, SS_QUESTS[questId]!);
+async function applyRewards(cid: number, questId: number, ss = false): Promise<Buffer[]> {
+  if (!useLegacy(questId, ss)) return applySsRewards(cid, SS_QUESTS[questId]!);
   const out: Buffer[] = [];
   for (const [iid, q] of TURN_IN_ITEMS[questId] ?? []) {
     out.push(...(await removeItemById(cid, iid, q)));
@@ -354,7 +357,7 @@ async function applyRewards(cid: number, questId: number): Promise<Buffer[]> {
 
 export async function acceptQuest(cid: number, level: number, questId: number, ss = false): Promise<Buffer[]> {
   if (!supported(questId)) return [await buildQuestAll(cid, ss)];
-  const legacy = isLegacy(questId);
+  const legacy = useLegacy(questId, ss);
   const needLv = (legacy ? NEED_LEVEL[questId] : SS_QUESTS[questId]!.needLevel) ?? 1;
   if (level < needLv) return [await buildQuestAll(cid, ss)];
   const needQ = legacy ? NEED_QUEST[questId] : SS_QUESTS[questId]!.needQuest;
@@ -395,7 +398,7 @@ export async function completeQuest(cid: number, questId: number, ss = false): P
     return { packets: [await buildQuestAll(cid, ss)], refreshChar: false };
   }
   await execute("UPDATE quests SET state=50 WHERE charid=? AND questid=?", [cid, questId]);
-  const rewardPkts = await applyRewards(cid, questId);
+  const rewardPkts = await applyRewards(cid, questId, ss);
   return {
     // Soul Saver's 0x80 handler (FUN_01362410) stores +26 as the quest state, so 1 would re-open the quest
     // in the Quest Alert; send 2 (done).
@@ -404,7 +407,7 @@ export async function completeQuest(cid: number, questId: number, ss = false): P
   };
 }
 
-export async function onMonsterKill(cid: number, template: number): Promise<Buffer[]> {
+export async function onMonsterKill(cid: number, template: number, ss = false): Promise<Buffer[]> {
   const rows = await query<RowDataPacket[]>(
     "SELECT id, questid AS questId, progress AS completeMonster, state AS questState FROM quests WHERE charid=? AND state=49",
     [cid],
@@ -412,7 +415,7 @@ export async function onMonsterKill(cid: number, template: number): Promise<Buff
   const out: Buffer[] = [];
   for (const r of rows) {
     const qid = Number(r.questId);
-    const def = killGoal(qid);
+    const def = killGoal(qid, ss);
     if (!def || def.template !== template) continue;
     let done = Number(r.completeMonster ?? 0);
     if (done >= def.count) continue;

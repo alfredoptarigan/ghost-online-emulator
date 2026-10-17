@@ -2962,7 +2962,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       // Official: party shares quest/QQ kill counts on the same map
       // (namuwiki 무리 / SSO tips — main reason PT levels faster).
       for (const pl of recipients) {
-        for (const q of await onMonsterKill(pl.charId, m.template)) send(pl, q);
+        for (const q of await onMonsterKill(pl.charId, m.template, pl.soulSaver)) send(pl, q);
       }
     } else {
       // legacy: status 7 then immediate status 1 at same coords (keeps walk clip alive).
