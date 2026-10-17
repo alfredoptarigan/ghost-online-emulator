@@ -1097,10 +1097,11 @@ async function handleTradePacket(p: Player, op: number, pkt: Buffer): Promise<vo
     if (!trade) return;
     const partner = players.get(trade.partnerId);
     if (response !== 1) {
-      clearTrade(p.charId);
-      clearTrade(trade.partnerId);
+      // Send before clearing: the Soul Saver 0x93 converter reads the partner from the trade session.
       if (partner?.loggedIn) send(partner, buildTradeInviteResponses(0));
       send(p, buildTradeInviteResponses(0));
+      clearTrade(p.charId);
+      clearTrade(trade.partnerId);
       console.log(`[field] trade-decline char=${p.charId}`);
       return;
     }
@@ -2335,14 +2336,125 @@ async function fishCatchTick(p: Player): Promise<void> {
   }
 }
 
+/** Spend one stat point (C# Char_Statup_Req). which: 1 STR, 2 DEX, 3 VIT, 4 INT. False when nothing was spent. */
+async function statUp(p: Player, which: number, ack = true): Promise<boolean> {
+  const row = await loadCharRow(p.charId);
+  if (!row) return false;
+  const pts = Number(row.st_point ?? 0);
+  if (pts < 1) return false;
+
+  let str = Number(row.str ?? 3);
+  let dex = Number(row.dex ?? 3);
+  let vit = Number(row.vit ?? 3);
+  let intel = Number(row.intel ?? 3);
+  let cmhp = Number(row.cmhp ?? 50);
+  let cmmp = Number(row.cmmp ?? 50);
+  let maxdamphy = Number(row.maxdamphy ?? 10);
+  let mindamphy = Number(row.mindamphy ?? 10);
+  let maxdamw = Number(row.maxdamw ?? 0);
+  let mindamw = Number(row.mindamw ?? 0);
+  let def = Number(row.def ?? 0);
+
+  if (which === 1) {
+    // STR: +3 MaxHp; MaxAttack +2 (+3 every 5th)
+    str += 1;
+    cmhp += 3;
+    maxdamphy += str % 5 !== 0 ? 2 : 3;
+  } else if (which === 2) {
+    // DEX: Attack/MaxAttack bump
+    dex += 1;
+    if (dex % 5 !== 0) {
+      mindamphy += 1;
+      maxdamphy += 2;
+    } else {
+      mindamphy += 2;
+      maxdamphy += 3;
+    }
+  } else if (which === 3) {
+    // VIT: +5 Def, +20 MaxHp
+    vit += 1;
+    def += 5;
+    cmhp += 20;
+  } else if (which === 4) {
+    // INT: +3 MaxMp; Magic bumps
+    intel += 1;
+    cmmp += 3;
+    if (intel % 5 !== 0) {
+      mindamw += 2;
+      maxdamw += 2;
+    } else {
+      mindamw += 3;
+      maxdamw += 3;
+    }
+  } else {
+    return false;
+  }
+
+  if (mindamphy > maxdamphy) mindamphy = maxdamphy;
+  if (mindamw > maxdamw) mindamw = maxdamw;
+
+  const chp = Math.min(Math.max(Number(row.chp ?? cmhp), 1), cmhp);
+  const cmp = Math.min(Math.max(Number(row.cmp ?? cmmp), 0), cmmp);
+
+  await execute(
+    `UPDATE characters SET st_point=st_point-1,
+      str=?, dex=?, vit=?, intel=?,
+      cmhp=?, cmmp=?, chp=?, cmp=?,
+      maxdamphy=?, mindamphy=?, maxdamw=?, mindamw=?, def=?
+     WHERE ID=? AND st_point>0`,
+    [str, dex, vit, intel, cmhp, cmmp, chp, cmp, maxdamphy, mindamphy, maxdamw, mindamw, def, p.charId],
+  );
+
+  p.maxHp = cmhp;
+  p.maxMp = cmmp;
+  p.hp = Math.min(p.hp, cmhp);
+  p.mp = Math.min(p.mp, cmmp);
+  p.minAtk = mindamphy;
+  p.maxAtk = maxdamphy;
+  p.minMag = mindamw;
+  p.maxMag = maxdamw;
+  p.def = def;
+
+  if (ack) {
+    send(p, await buildStatUpAck(p.charId));
+    sendVital(p);
+    console.log(
+      `[field] stat-up char=${p.charId} which=${which} str=${str} dex=${dex} vit=${vit} int=${intel} hp=${cmhp} atk=${mindamphy}-${maxdamphy} def=${def}`,
+    );
+  }
+  return true;
+}
+
+/** Stat order the Auto button cycles through per 1st job (1 STR, 2 DEX, 3 VIT, 4 INT). */
+const AUTO_STAT_CYCLE: Record<number, number[]> = {
+  1: [1, 1, 3], // Warrior: STR, STR, VIT
+  2: [2, 2, 1], // Assassin: DEX, DEX, STR
+  3: [4, 4, 3], // Mage: INT, INT, VIT
+};
+
+/** Soul Saver Auto stat button (0x5F stat 6): spend every remaining point following the job cycle. */
+async function autoStat(p: Player): Promise<void> {
+  const cycle = AUTO_STAT_CYCLE[p.job] ?? [1, 2, 3, 4];
+  let n = 0;
+  while (await statUp(p, cycle[n % cycle.length]!, false)) n++;
+  if (!n) return;
+  send(p, await buildStatUpAck(p.charId));
+  sendVital(p);
+  console.log(`[field] stat-auto char=${p.charId} job=${p.job} spent=${n}`);
+}
+
 async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
   if (p.soulSaver) pkt = fromSoulSaver(pkt);
   const op = opcodeOf(pkt);
   if (p.soulSaver && op === 0x0738 && pkt.length >= 13) {
-    // Soul Saver stat +10 button: same stat byte @12 as 0x5F; run the 0x5F path ten times.
-    const one = Buffer.from(pkt);
-    one.writeUInt16LE(0x005f, 2);
-    for (let i = 0; i < 10; i++) await handlePacket(p, one);
+    // Soul Saver stat +10 button: same stat byte @12 as 0x5F; spend up to ten points, ack once.
+    const which = pkt.readUInt8(12);
+    let n = 0;
+    while (n < 10 && (await statUp(p, which, false))) n++;
+    if (n) {
+      send(p, await buildStatUpAck(p.charId));
+      sendVital(p);
+    }
     return;
   }
   console.log(
@@ -3307,91 +3419,11 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     return;
   }
 
-  // stat up 0x5F — bump base stat + derived combat values (C# Char_Statup_Req)
+  // stat up 0x5F — bump base stat + derived combat values (Soul Saver Auto button sends stat 6)
   if (op === 0x005f) {
     const which = pkt.readUInt8(12);
-    const row = await loadCharRow(p.charId);
-    if (!row) return;
-    const pts = Number(row.st_point ?? 0);
-    if (pts < 1) return;
-
-    let str = Number(row.str ?? 3);
-    let dex = Number(row.dex ?? 3);
-    let vit = Number(row.vit ?? 3);
-    let intel = Number(row.intel ?? 3);
-    let cmhp = Number(row.cmhp ?? 50);
-    let cmmp = Number(row.cmmp ?? 50);
-    let maxdamphy = Number(row.maxdamphy ?? 10);
-    let mindamphy = Number(row.mindamphy ?? 10);
-    let maxdamw = Number(row.maxdamw ?? 0);
-    let mindamw = Number(row.mindamw ?? 0);
-    let def = Number(row.def ?? 0);
-
-    if (which === 1) {
-      // STR: +3 MaxHp; MaxAttack +2 (+3 every 5th)
-      str += 1;
-      cmhp += 3;
-      maxdamphy += str % 5 !== 0 ? 2 : 3;
-    } else if (which === 2) {
-      // DEX: Attack/MaxAttack bump
-      dex += 1;
-      if (dex % 5 !== 0) {
-        mindamphy += 1;
-        maxdamphy += 2;
-      } else {
-        mindamphy += 2;
-        maxdamphy += 3;
-      }
-    } else if (which === 3) {
-      // VIT: +5 Def, +20 MaxHp
-      vit += 1;
-      def += 5;
-      cmhp += 20;
-    } else if (which === 4) {
-      // INT: +3 MaxMp; Magic bumps
-      intel += 1;
-      cmmp += 3;
-      if (intel % 5 !== 0) {
-        mindamw += 2;
-        maxdamw += 2;
-      } else {
-        mindamw += 3;
-        maxdamw += 3;
-      }
-    } else {
-      return;
-    }
-
-    if (mindamphy > maxdamphy) mindamphy = maxdamphy;
-    if (mindamw > maxdamw) mindamw = maxdamw;
-
-    const chp = Math.min(Math.max(Number(row.chp ?? cmhp), 1), cmhp);
-    const cmp = Math.min(Math.max(Number(row.cmp ?? cmmp), 0), cmmp);
-
-    await execute(
-      `UPDATE characters SET st_point=st_point-1,
-        str=?, dex=?, vit=?, intel=?,
-        cmhp=?, cmmp=?, chp=?, cmp=?,
-        maxdamphy=?, mindamphy=?, maxdamw=?, mindamw=?, def=?
-       WHERE ID=? AND st_point>0`,
-      [str, dex, vit, intel, cmhp, cmmp, chp, cmp, maxdamphy, mindamphy, maxdamw, mindamw, def, p.charId],
-    );
-
-    p.maxHp = cmhp;
-    p.maxMp = cmmp;
-    p.hp = Math.min(p.hp, cmhp);
-    p.mp = Math.min(p.mp, cmmp);
-    p.minAtk = mindamphy;
-    p.maxAtk = maxdamphy;
-    p.minMag = mindamw;
-    p.maxMag = maxdamw;
-    p.def = def;
-
-    send(p, await buildStatUpAck(p.charId));
-    sendVital(p);
-    console.log(
-      `[field] stat-up char=${p.charId} which=${which} str=${str} dex=${dex} vit=${vit} int=${intel} hp=${cmhp} atk=${mindamphy}-${maxdamphy} def=${def}`,
-    );
+    if (which === 6) await autoStat(p);
+    else await statUp(p, which);
     return;
   }
 

@@ -5,6 +5,7 @@
  * The rest of the server builds Game4 layouts; `toSoulSaver` converts them on send.
  */
 import { config } from "../config.js";
+import { getTrade } from "./trade.js";
 
 /** Base body item (client builds its own preview ENTERPLAYER with this at +0x84). */
 export const SS_DEFAULT_BODY = 9000006;
@@ -352,6 +353,75 @@ function ssChat(g: Buffer): Buffer {
   return s;
 }
 
+/** Packets whose Soul Saver layout only appends fields: copy the Game4 bytes and zero-fill to `len`. */
+function ssPad(len: number) {
+  return (g: Buffer): Buffer => {
+    const s = Buffer.alloc(len, 0);
+    g.copy(s, 0, 0, Math.min(g.length, len));
+    return s;
+  };
+}
+
+/**
+ * SHOUT 0xFB - FUN_01622400 (440 bytes): channel @12 (0xFF = all channels), name[20] @13, message @0x21
+ * (the client drops the whole shout when it is longer than 199 bytes), type u16 @0xEA (2/3 = highlighted).
+ * u32s @0xEC..0x118 are the speaker avatar for the shout portrait; out-of-range ids are ignored, so 0 is safe.
+ */
+function ssShout(g: Buffer): Buffer {
+  const s = Buffer.alloc(440, 0);
+  g.copy(s, 0, 0, 0x21);
+  const end = g.indexOf(0, 0x21);
+  g.copy(s, 0x21, 0x21, Math.min(end < 0 ? 0x121 : end, 0x21 + 199));
+  s.writeUInt16LE(g.readUInt16LE(0x121), 0xea);
+  return s;
+}
+
+/**
+ * TRADE_PUT 0x9A - FUN_012aafa0 (2812 bytes): charId A @12, charId B @16, money A/B u32 @20/@24, then 12 items
+ * for A @0x1c and 12 for B @0x58c, 116 bytes each (Game4 48). The first 20 bytes of an item (id, spirit,
+ * quantity, 10 levels, fusion) keep the Game4 order; the rest (options, pet name, ...) stays 0.
+ */
+function ssTradePut(g: Buffer): Buffer {
+  const s = Buffer.alloc(2812, 0);
+  g.copy(s, 0, 0, 28);
+  for (let i = 0; i < 24; i++) g.copy(s, 0x1c + 0x74 * i, 28 + 48 * i, 48 + 48 * i);
+  return s;
+}
+
+/** TRADE_RESPONSE 0x93 - FUN_012cec20 (20 bytes): response @12, partner charId @16 (an invalid one cancels). */
+function ssTradeResponse(g: Buffer, charId: number): Buffer {
+  const s = Buffer.alloc(20, 0);
+  g.copy(s, 0, 0, 16);
+  s.writeInt32LE(getTrade(charId)?.partnerId ?? -1, 16);
+  return s;
+}
+
+/**
+ * PARTY_UPDATE 0x9D - FUN_012b10d0 (500 bytes): 6 members x 80 bytes from 12 (Game4 44): charId @0, level
+ * u16 @4, name @6, max HP/HP/max MP/MP u32 @0x1c..0x28, UDP port u16 @0x2c, ip bytes @0x2e and @0x32, a second
+ * string @0x36. Loot/EXP share modes u32 @0x1ec/@0x1f0 (0 or 1).
+ */
+function ssPartyUpdate(g: Buffer): Buffer {
+  const s = Buffer.alloc(500, 0);
+  g.copy(s, 0, 0, 12);
+  for (let i = 0; i < 6; i++) {
+    const go = 12 + 44 * i;
+    const so = 12 + 80 * i;
+    g.copy(s, so, go, go + 26); // charId, level, name
+    for (let k = 0; k < 4; k++) s.writeUInt32LE(g.readUInt16LE(go + 26 + 2 * k), so + 0x1c + 4 * k);
+    g.copy(s, so + 0x2c, go + 34, go + 44); // port, ip x2
+  }
+  return s;
+}
+
+/** PARTY_HP 0xA1 - FUN_012ab8d0 (32 bytes): charId @12, max HP/HP/max MP/MP u32 @0x10..0x1c (Game4 u16). */
+function ssPartyHp(g: Buffer): Buffer {
+  const s = Buffer.alloc(32, 0);
+  g.copy(s, 0, 0, 16);
+  for (let k = 0; k < 4; k++) s.writeUInt32LE(g.readUInt16LE(16 + 2 * k), 16 + 4 * k);
+  return s;
+}
+
 /**
  * refreshBagPackets() without a magic (quests, player shops, trade) builds the en-client layouts (20 slots:
  * equip 692, spend 276, other 232). Rewrite them into the Game4 layout first so the converters below apply.
@@ -430,6 +500,17 @@ const converters: Record<number, { len: number; fn: (g: Buffer, charId: number) 
   0x4d: { len: 28, fn: ssDropClear },
   0x3f: { len: 70, fn: ssMonRegen },
   0x17: { len: 120, fn: ssChat },
+  // NOTICE: type @12, message @13 (up to 127 bytes); same as Game4 apart from the length.
+  0x12: { len: 80, fn: ssPad(140) },
+  0xfb: { len: 0x124, fn: ssShout },
+  0x93: { len: 16, fn: ssTradeResponse },
+  0x9a: { len: 1180, fn: ssTradePut },
+  // PARTY_INVITE: inviter charId @12; the name @16 is only read when the charId is negative.
+  0x9b: { len: 16, fn: ssPad(36) },
+  0x9d: { len: 276, fn: ssPartyUpdate },
+  0xa1: { len: 28, fn: ssPartyHp },
+  // HIDE 0x61 (FUN_012cf8a0): charId u16 @12, active @14, effect id u32 @16 (0 = default effect 0x3e9).
+  0x61: { len: 16, fn: ssPad(20) },
 };
 
 /**
