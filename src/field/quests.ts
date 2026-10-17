@@ -5,7 +5,7 @@ import { query, execute } from "../db.js";
 import { config, rates } from "../config.js";
 import { writeHeader } from "../net/packet.js";
 import { addItemToInventory, removeInvQty, refreshBagPackets } from "./inventory.js";
-import { isSsChar, recomputeSsStats, ssExpForLevel, SS_STAT_POINTS_PER_LEVEL, SS_SKILL_POINTS_PER_LEVEL } from "./ssstats.js";
+import { isSsChar, setSsClass, recomputeSsStats, ssExpForLevel, SS_STAT_POINTS_PER_LEVEL, SS_SKILL_POINTS_PER_LEVEL } from "./ssstats.js";
 import { ensureBeginnerSkills, buildSkillAll } from "./skills.js";
 
 /** remote DB: quests(charid, questid, state, progress). Packets match legacy legacy quests. */
@@ -392,6 +392,11 @@ export async function giveUpQuest(cid: number, questId: number, ss = false): Pro
 
 export type QuestCompleteResult = { packets: Buffer[]; refreshChar: boolean };
 
+/** Soul Saver lv10 Job Change quests (Fencer, Assassin, Magic User, Fighter, Archer, Spearman) ’ job tier 1. */
+const SS_JOB_CHANGE = new Set([16, 19, 21, 351, 612, 2018]);
+/** lv60 "2nd Job Change(3)" quests ’ job tier 3. */
+const SS_JOB2_CHANGE = new Set([169, 172, 175, 178, 181, 184, 385, 388, 635, 638, 2092, 2095]);
+
 export async function completeQuest(cid: number, questId: number, ss = false): Promise<QuestCompleteResult> {
   const row = await getRow(cid, questId);
   if (!row || Number(row.questState) !== 0x31 || !supported(questId)) {
@@ -399,6 +404,8 @@ export async function completeQuest(cid: number, questId: number, ss = false): P
   }
   await execute("UPDATE quests SET state=50 WHERE charid=? AND questid=?", [cid, questId]);
   const rewardPkts = await applyRewards(cid, questId, ss);
+  if (ss && SS_JOB_CHANGE.has(questId)) await setSsClass(cid, 1);
+  if (ss && SS_JOB2_CHANGE.has(questId)) await setSsClass(cid, 3);
   return {
     // Soul Saver's 0x80 handler (FUN_01362410) stores +26 as the quest state, so 1 would re-open the quest
     // in the Quest Alert; send 2 (done).

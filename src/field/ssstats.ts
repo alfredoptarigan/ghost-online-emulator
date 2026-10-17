@@ -34,7 +34,10 @@ type JobBase = {
   nStateIntSP: number;
 };
 
-type JobsTable = { base: JobBase[]; growth: Array<{ eClass: number; nGlowthHP: number; nGlowthSP: number }> };
+type JobsTable = {
+  base: JobBase[];
+  growth: Array<{ eClass: number; eFaction: number; eJob: number; nGlowthHP: number; nGlowthSP: number }>;
+};
 type ItemsTable = Record<string, { s?: number; f?: number[] }>;
 let jobs: JobsTable | null = null;
 let expTable: Record<string, number> | null = null;
@@ -58,12 +61,34 @@ let columnReady = false;
 async function ensureColumn(): Promise<void> {
   if (columnReady) return;
   await execute("ALTER TABLE characters ADD COLUMN IF NOT EXISTS ss_char tinyint NOT NULL DEFAULT 0");
+  // Job tier for tb_JobGrowth: 0 Novice, 1 after the lv10 Job Change quest, 3 after the lv60 2nd Job Change.
+  await execute("ALTER TABLE characters ADD COLUMN IF NOT EXISTS ss_class tinyint NOT NULL DEFAULT 0");
+  // Growth history "class:level,&": from that level on, levels grow with that tb_JobGrowth class.
+  await execute("ALTER TABLE characters ADD COLUMN IF NOT EXISTS ss_growth varchar(64) NOT NULL DEFAULT ''");
   columnReady = true;
 }
 
 export async function markSsChar(charId: number): Promise<void> {
   await ensureColumn();
   await execute("UPDATE characters SET ss_char=1, mexp=? WHERE ID=?", [ssExpForLevel(1), charId]);
+}
+
+/** Raise the job tier (never lowers it). */
+export async function setSsClass(charId: number, tier: number): Promise<void> {
+  await ensureColumn();
+  await execute("UPDATE characters SET ss_class=GREATEST(ss_class, ?) WHERE ID=?", [tier, charId]);
+}
+
+/**
+ * tb_JobGrowth row: eClass 0 Novice (+10 HP/+15 MP per level, official lv1-4), 1 = job after the Job Change
+ * quest (Magic User +14/+42), 2 = faction chosen (job3 1 Justice / 2 Chaos / 3), 3 = 2nd job (White/Black Mage).
+ * Growth is cumulative: each level keeps the row of the tier it was gained in (ss_growth history), so a job change
+ * does not rewrite earlier levels (official lv1-4 = 4 × Novice row).
+ */
+export function ssGrowthClass(tier: number, faction: number): number {
+  if (tier <= 0) return 0;
+  if (tier >= 3 && faction >= 1) return 3;
+  return faction >= 1 && faction <= 3 ? 2 : 1;
 }
 
 export async function isSsChar(charId: number): Promise<boolean> {
@@ -82,11 +107,33 @@ export type SsStats = {
   def: number;
 };
 
-export function ssDerive(job: number, level: number, str: number, dex: number, con: number, int: number, worn: number[]): SsStats {
+export function ssDerive(
+  job: number,
+  level: number,
+  str: number,
+  dex: number,
+  con: number,
+  int: number,
+  worn: number[],
+  growth: Array<[cls: number, fromLevel: number]> = [],
+  faction = 0,
+): SsStats {
   const jt = (jobs ??= load<JobsTable>("ss_jobs.json", (j) => j, { base: [], growth: [] }));
   const it0 = (items ??= load<ItemsTable>("ss_items.json", (j) => j.items ?? {}, {}));
   const b = jt.base.find((r) => r.nID === job) ?? jt.base.find((r) => r.nID === 0);
-  const g = jt.growth.find((r) => r.eClass === 0) ?? { nGlowthHP: 1000, nGlowthSP: 1500 };
+  const novice = jt.growth.find((r) => r.eClass === 0) ?? { nGlowthHP: 1000, nGlowthSP: 1500 };
+  const rowOf = (gc: number) =>
+    (gc > 0 && jt.growth.find((r) => r.eClass === gc && r.eJob === job && (gc < 2 || r.eFaction === faction))) || novice;
+  // Level  (1..level) grows with the last class recorded at a level below .
+  let gHp = 0;
+  let gMp = 0;
+  for (let l = 1; l <= level; l++) {
+    let gc = 0;
+    for (const [cls, from] of growth) if (from < l) gc = cls;
+    const row = rowOf(gc);
+    gHp += row.nGlowthHP;
+    gMp += row.nGlowthSP;
+  }
   const c = (v: number | undefined) => (v ?? 0) / 100;
   let phyAdd = 0;
   let magAdd = 0;
@@ -103,8 +150,8 @@ export function ssDerive(job: number, level: number, str: number, dex: number, c
   }
   const magBase = 7 + Math.floor(int * c(b?.nStateIntAtt));
   return {
-    maxHp: 1 + Math.floor(con * c(b?.nStateConHP) + str * c(b?.nStateStrHP)) + Math.floor((level * g.nGlowthHP) / 100),
-    maxMp: 1 + Math.floor(int * c(b?.nStateIntSP)) + Math.floor((level * g.nGlowthSP) / 100),
+    maxHp: 1 + Math.floor(con * c(b?.nStateConHP) + str * c(b?.nStateStrHP)) + Math.floor(gHp / 100),
+    maxMp: 1 + Math.floor(int * c(b?.nStateIntSP)) + Math.floor(gMp / 100),
     phyMax: Math.floor(str * c(b?.nStateStrAtt)) + Math.floor(dex * c(b?.nStateDexMax)) + phyAdd,
     phyMin: Math.floor(str * c(b?.nStateStrAtt)) + Math.floor(dex * c(b?.nStateDexMin)) + phyAdd,
     magMax: magBase + magAdd,
@@ -125,12 +172,23 @@ export async function refreshSsWeapon(charId: number): Promise<void> {
 export async function recomputeSsStats(charId: number): Promise<SsStats | null> {
   if (!(await isSsChar(charId))) return null;
   const rows = await query<RowDataPacket[]>(
-    "SELECT job, level, str, dex, vit, intel, chp, cmp FROM characters WHERE ID=?",
+    "SELECT job, job3, ss_class, ss_growth, level, str, dex, vit, intel, chp, cmp FROM characters WHERE ID=?",
     [charId],
   );
   const r = rows[0];
   if (!r) return null;
   const worn = await query<RowDataPacket[]>("SELECT type FROM equip WHERE charid=? AND pos1=0", [charId]);
+  const faction = Number(r.job3 ?? 0);
+  const level = Number(r.level ?? 1);
+  const growth: Array<[number, number]> = String(r.ss_growth ?? "")
+    .split(",")
+    .filter(Boolean)
+    .map((x) => x.split(":").map(Number) as [number, number]);
+  const gc = ssGrowthClass(Number(r.ss_class ?? 0), faction);
+  if ((growth.at(-1)?.[0] ?? 0) !== gc) {
+    growth.push([gc, level]);
+    await execute("UPDATE characters SET ss_growth=? WHERE ID=?", [growth.map((g) => g.join(":")).join(","), charId]);
+  }
   const s = ssDerive(
     Number(r.job ?? 0),
     Number(r.level ?? 1),
@@ -139,6 +197,8 @@ export async function recomputeSsStats(charId: number): Promise<SsStats | null> 
     Number(r.vit ?? 3),
     Number(r.intel ?? 3),
     worn.map((w) => Number(w.type)),
+    growth,
+    faction,
   );
   await execute(
     `UPDATE characters SET cmhp=?, cmmp=?, chp=LEAST(chp, ?), cmp=LEAST(cmp, ?),

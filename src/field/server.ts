@@ -1833,6 +1833,7 @@ function levelUpPacket(charId: number, level = 0): Buffer {
  */
 async function grantMonsterExp(p: Player, amount: number): Promise<boolean> {
   if (amount <= 0 || !p.loggedIn) return false;
+  const startLevel = p.level;
   const buff = activeBuffOrNull(p.eventBuff);
   const mul = buff?.expMul ?? 1;
   p.exp += Math.max(1, Math.floor(amount * mul));
@@ -1875,6 +1876,7 @@ async function grantMonsterExp(p: Player, amount: number): Promise<boolean> {
       await execute("UPDATE characters SET chp=?, cmp=? WHERE ID=?", [p.hp, p.mp, p.charId]);
     }
     send(p, await charAll(p.charId));
+    await ssLevelUpRewards(p, startLevel, p.level);
   }
   return leveled;
 }
@@ -2546,6 +2548,26 @@ async function autoStat(p: Player): Promise<void> {
   send(p, await buildStatUpAck(p.charId));
   sendVital(p);
   console.log(`[field] stat-auto char=${p.charId} job=${p.job} spent=${n}`);
+}
+
+/** tb_levelupevent (client Chart): item rewards on reaching levels 18, 36, 54, & (Soul Saver only). */
+type LevelUpEvent = { nLevel: number; nItemID: number; eInvenNo: number; nItemCount: number };
+let levelUpEvents: LevelUpEvent[] | null = null;
+async function ssLevelUpRewards(p: Player, fromLevel: number, toLevel: number): Promise<void> {
+  if (!p.soulSaver || toLevel <= fromLevel) return;
+  if (!levelUpEvents) {
+    try {
+      levelUpEvents = JSON.parse(fs.readFileSync(path.join(config.dataDir, "ss_levelup.json"), "utf8")).levelUpEvent ?? [];
+    } catch {
+      levelUpEvents = [];
+    }
+  }
+  const gifts = levelUpEvents!
+    .filter((e) => e.nLevel > fromLevel && e.nLevel <= toLevel)
+    .map((e) => ({ itemId: e.nItemID, count: Math.max(1, e.nItemCount), tab: e.eInvenNo }));
+  if (!gifts.length) return;
+  console.log(`[field] level-up reward char=${p.charId} lv${fromLevel}->${toLevel} ${gifts.map((g) => g.itemId).join(",")}`);
+  await giveGifts(p, gifts);
 }
 
 /** Soul Saver characters: recompute HP/MP/attack/def from the client job tables and refresh the live player. */
@@ -3470,6 +3492,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       if (p.level > levelBefore) {
         send(p, levelUpPacket(p.charId, p.level));
         broadcastMap(p.map, p.region, levelUpPacket(p.charId, p.level), p.charId);
+        await ssLevelUpRewards(p, levelBefore, p.level);
       }
       send(p, await charAll(p.charId));
       send(p, await buildSkillAll(p.charId));
