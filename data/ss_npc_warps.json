@@ -1,0 +1,1535 @@
+{
+ "source": "Game.exe build 2026092201 (re-tools/game_dump.exe, base 0xFF0000), Lua menus from zGsp/Script/npc_*.luc. Chain: Lua API -> menu button (FUN_0149b090) -> UI click dispatcher case -> confirm dialog (FUN_010e3300) -> Yes button case -> C 0x85 built with hard-coded FUN_0101bf20(map, region, x, y). Checked by hand: NPC_WARP_THEME_1 (FUN_0124fc50) and NPC_WARP_TO_CHUNGUM_MARKET_PLACE.",
+ "packet": "C 0x85 (28 B): u16 map@12, u16 region@14, u16 x@16, u16 y@18, u32 gold cost@20 (client fills it only if money >= cost; 0 inside 10/38 and 98/1), u32 NPC id@24 (1 for map portals)",
+ "status": "verified-static = literal values read from the client; unverified = resolved but the branch is uncertain; unresolved = action not traced (instance/event buttons); server-decides = client sends -1",
+ "warps": {
+  "ADD_NPC_WARP_INDUN_EXIT": {
+   "api": "ADD_NPC_WARP_INDUN_EXIT",
+   "npcs": [
+    4200004,
+    4391012,
+    4391032,
+    4391042,
+    4391052,
+    4391062,
+    4391072,
+    4391082,
+    4391092,
+    4391101,
+    4391102,
+    4391103,
+    4391104,
+    4391105,
+    4391106,
+    4391107,
+    4391108,
+    4391109,
+    4391110,
+    4391111,
+    4391113,
+    4391115,
+    4391912
+   ],
+   "label": {
+    "id": 1032032,
+    "text": "[Escape Netherworld]"
+   },
+   "menuButton": 49122,
+   "dialog": 49123,
+   "yesButton": 49124,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "destination chosen at runtime by FUN_124d110 (several hard-coded exits)"
+  },
+  "NPC_WARP_THEME_1": {
+   "api": "NPC_WARP_THEME_1",
+   "npcs": [
+    4213009,
+    4314016,
+    4314017,
+    4314018,
+    4314019,
+    4314030,
+    4314031,
+    4314038,
+    4314039,
+    4314040,
+    4314042,
+    4314043,
+    4314045,
+    4314046,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314056,
+    4314057
+   ],
+   "label": {
+    "id": 1012084,
+    "text": "[Chaste Hall]"
+   },
+   "menuButton": 49025,
+   "dialog": 37533,
+   "yesButton": 37042,
+   "dest": {
+    "map": 1,
+    "region": 1,
+    "x": 975,
+    "y": 1480
+   },
+   "cost": 1000,
+   "status": "verified-static",
+   "mapName": "ChasteHall"
+  },
+  "NPC_WARP_THEME_42": {
+   "api": "NPC_WARP_THEME_42",
+   "npcs": [
+    4213009,
+    4314015,
+    4314016,
+    4314017,
+    4314018,
+    4314030,
+    4314031,
+    4314038,
+    4314039,
+    4314040,
+    4314042,
+    4314043,
+    4314045,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314056
+   ],
+   "label": {
+    "id": 1032209,
+    "text": "[Hanyaville]"
+   },
+   "menuButton": 49093,
+   "dialog": 37709,
+   "yesButton": 37710,
+   "dest": {
+    "map": 42,
+    "region": 2,
+    "x": 1886,
+    "y": 610
+   },
+   "cost": 1000,
+   "status": "verified-static",
+   "mapName": "Hanyaville(S)"
+  },
+  "NPC_WARP_TO_CHUNGUM_MARKET_PLACE": {
+   "api": "NPC_WARP_TO_CHUNGUM_MARKET_PLACE",
+   "npcs": [
+    4213009,
+    4314016,
+    4314017,
+    4314018,
+    4314019,
+    4314030,
+    4314031,
+    4314038,
+    4314039,
+    4314040,
+    4314042,
+    4314043,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314056,
+    4314057
+   ],
+   "label": {
+    "id": 1032075,
+    "text": "{0xFF00D7FF}[Market]{END}"
+   },
+   "menuButton": 37729,
+   "dialog": 37730,
+   "yesButton": 37731,
+   "dest": {
+    "map": 1,
+    "region": 50,
+    "x": 709,
+    "y": 625
+   },
+   "cost": 1000,
+   "status": "verified-static",
+   "mapName": "Market"
+  },
+  "NPC_WARP_THEME_27": {
+   "api": "NPC_WARP_THEME_27",
+   "npcs": [
+    4213009,
+    4314015,
+    4314016,
+    4314017,
+    4314018,
+    4314019,
+    4314030,
+    4314031,
+    4314039,
+    4314040,
+    4314042,
+    4314043,
+    4314046,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314057
+   ],
+   "label": {
+    "id": 1012082,
+    "text": "[Buddha Town]"
+   },
+   "menuButton": 49086,
+   "dialog": 37692,
+   "yesButton": 37075,
+   "dest": {
+    "map": 27,
+    "region": 1,
+    "x": 2399,
+    "y": 1325
+   },
+   "cost": 1200,
+   "status": "verified-static",
+   "mapName": "BuddhaTown(W)"
+  },
+  "NPC_WARP_THEME_16": {
+   "api": "NPC_WARP_THEME_16",
+   "npcs": [
+    4213009,
+    4314015,
+    4314016,
+    4314018,
+    4314019,
+    4314030,
+    4314031,
+    4314038,
+    4314039,
+    4314040,
+    4314042,
+    4314043,
+    4314046,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314056
+   ],
+   "label": {
+    "id": 1012075,
+    "text": "[Nameless Lake]"
+   },
+   "menuButton": 49027,
+   "dialog": 37535,
+   "yesButton": 37044,
+   "dest": {
+    "map": 16,
+    "region": 1,
+    "x": 1985,
+    "y": 1080
+   },
+   "cost": 1500,
+   "status": "verified-static",
+   "mapName": "NamelessLake"
+  },
+  "NPC_WARP_THEME_10": {
+   "api": "NPC_WARP_THEME_10",
+   "npcs": [
+    4213009,
+    4314015,
+    4314017,
+    4314018,
+    4314019,
+    4314030,
+    4314031,
+    4314038,
+    4314039,
+    4314040,
+    4314042,
+    4314043,
+    4314045,
+    4314046,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314056,
+    4314057
+   ],
+   "label": {
+    "id": 1012042,
+    "text": "[Dusk Castle]"
+   },
+   "menuButton": 49026,
+   "dialog": 37534,
+   "yesButton": 37043,
+   "dest": {
+    "map": 10,
+    "region": 3,
+    "x": 1645,
+    "y": 870
+   },
+   "cost": 1500,
+   "status": "verified-static",
+   "mapName": "DuskCastle(S)"
+  },
+  "NPC_WARP_THEME_46": {
+   "api": "NPC_WARP_THEME_46",
+   "npcs": [
+    4213009,
+    4314015,
+    4314016,
+    4314017,
+    4314018,
+    4314019,
+    4314030,
+    4314031,
+    4314038,
+    4314039,
+    4314040,
+    4314043,
+    4314046,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314057
+   ],
+   "label": {
+    "id": 1032210,
+    "text": "[Hauntville] "
+   },
+   "menuButton": 49094,
+   "dialog": 37711,
+   "yesButton": 37712,
+   "dest": {
+    "map": 46,
+    "region": 2,
+    "x": 1400,
+    "y": 936
+   },
+   "cost": 1500,
+   "status": "verified-static",
+   "mapName": "Hauntville(S)"
+  },
+  "NPC_WARP_THEME_12": {
+   "api": "NPC_WARP_THEME_12",
+   "npcs": [
+    4213009,
+    4314015,
+    4314016,
+    4314017,
+    4314019,
+    4314030,
+    4314031,
+    4314038,
+    4314039,
+    4314040,
+    4314042,
+    4314043,
+    4314046,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314057
+   ],
+   "label": {
+    "id": 1012065,
+    "text": "[Dragon Tavern]"
+   },
+   "menuButton": 49028,
+   "dialog": 37536,
+   "yesButton": 37045,
+   "dest": {
+    "map": 12,
+    "region": 1,
+    "x": 1040,
+    "y": 745
+   },
+   "cost": 3000,
+   "status": "verified-static",
+   "mapName": "DragonTavern"
+  },
+  "NPC_WARP_THEME_15": {
+   "api": "NPC_WARP_THEME_15",
+   "npcs": [
+    4213009,
+    4314015,
+    4314016,
+    4314017,
+    4314018,
+    4314019,
+    4314031,
+    4314038,
+    4314039,
+    4314040,
+    4314042,
+    4314043,
+    4314045,
+    4314046,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314057
+   ],
+   "label": {
+    "id": 1012067,
+    "text": "[Dragon Castle]"
+   },
+   "menuButton": 49101,
+   "dialog": 37613,
+   "yesButton": 37064,
+   "dest": {
+    "map": 15,
+    "region": 2,
+    "x": 3580,
+    "y": 1035
+   },
+   "cost": 5000,
+   "status": "verified-static",
+   "mapName": "DragonCastle(N)"
+  },
+  "NPC_WARP_THEME_20": {
+   "api": "NPC_WARP_THEME_20",
+   "npcs": [
+    4213009,
+    4314015,
+    4314016,
+    4314017,
+    4314018,
+    4314019,
+    4314030,
+    4314038,
+    4314039,
+    4314040,
+    4314042,
+    4314043,
+    4314046,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314057
+   ],
+   "label": {
+    "id": 1012059,
+    "text": "[Stalactite Mine]"
+   },
+   "menuButton": 49100,
+   "dialog": 37612,
+   "yesButton": 37063,
+   "dest": {
+    "map": 20,
+    "region": 70,
+    "x": 55,
+    "y": 600
+   },
+   "cost": 3000,
+   "status": "verified-static",
+   "mapName": "StalactiteMine"
+  },
+  "NPC_WARP_THEME_25": {
+   "api": "NPC_WARP_THEME_25",
+   "npcs": [
+    4213009,
+    4314015,
+    4314016,
+    4314017,
+    4314018,
+    4314019,
+    4314030,
+    4314031,
+    4314038,
+    4314040,
+    4314042,
+    4314043,
+    4314046,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314057
+   ],
+   "label": {
+    "id": 1012020,
+    "text": "[Hermit Town]"
+   },
+   "menuButton": 49084,
+   "dialog": 37690,
+   "yesButton": 37073,
+   "dest": {
+    "map": 25,
+    "region": 1,
+    "x": 3510,
+    "y": 1276
+   },
+   "cost": 18000,
+   "status": "verified-static",
+   "mapName": "HermitTown(S)"
+  },
+  "NPC_WARP_THEME_39": {
+   "api": "NPC_WARP_THEME_39",
+   "npcs": [
+    4213009,
+    4314015,
+    4314016,
+    4314017,
+    4314018,
+    4314019,
+    4314030,
+    4314031,
+    4314038,
+    4314039,
+    4314040,
+    4314042,
+    4314046,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314057
+   ],
+   "label": {
+    "id": 1032211,
+    "text": "[Tavern Conch] "
+   },
+   "menuButton": 49095,
+   "dialog": 37713,
+   "yesButton": 37714,
+   "dest": {
+    "map": 39,
+    "region": 1,
+    "x": 970,
+    "y": 1160
+   },
+   "cost": 30000,
+   "status": "verified-static",
+   "mapName": "TavernConch"
+  },
+  "NPC_WARP_THEME_26": {
+   "api": "NPC_WARP_THEME_26",
+   "npcs": [
+    4213009,
+    4314015,
+    4314016,
+    4314017,
+    4314018,
+    4314019,
+    4314030,
+    4314031,
+    4314038,
+    4314039,
+    4314042,
+    4314043,
+    4314046,
+    4314047,
+    4314048,
+    4314049,
+    4314055,
+    4314057
+   ],
+   "label": {
+    "id": 1012080,
+    "text": "[Tian Temple]"
+   },
+   "menuButton": 49085,
+   "dialog": 37691,
+   "yesButton": 37074,
+   "dest": {
+    "map": 26,
+    "region": 13,
+    "x": 1819,
+    "y": 990
+   },
+   "cost": 25000,
+   "status": "verified-static",
+   "mapName": "TianTemple"
+  },
+  "Warp1000suEnter": {
+   "api": "Warp1000suEnter",
+   "npcs": [
+    4216007
+   ],
+   "label": {
+    "id": 1032097,
+    "text": "[Kali]"
+   },
+   "menuButton": 37693,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "NPC_WARP_SUNYOOGOK": {
+   "api": "NPC_WARP_SUNYOOGOK",
+   "npcs": [
+    4221001
+   ],
+   "label": {
+    "id": 1032074,
+    "text": "{0xFF00D7FF}[Enter Sunyu Vale]{END}"
+   },
+   "menuButton": 37762,
+   "dialog": 37763,
+   "yesButton": 37764,
+   "dest": {
+    "map": 51,
+    "region": 1,
+    "x": 430,
+    "y": 295
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "SunyuVale[1]"
+  },
+  "NPC_WARP_THEME_52_19": {
+   "api": "NPC_WARP_THEME_52_19",
+   "npcs": [
+    4221001
+   ],
+   "label": {
+    "id": 1032175,
+    "text": "{0xFF00D7FF}[Heaven's Column]{END}"
+   },
+   "menuButton": 37839,
+   "dialog": 37840,
+   "yesButton": 37841,
+   "dest": {
+    "map": 52,
+    "region": 19,
+    "x": 479,
+    "y": 1026
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "ColumnOfHeaven"
+  },
+  "ADD_NPC_WARP_PVPLEAGUE_OUT": {
+   "api": "ADD_NPC_WARP_PVPLEAGUE_OUT",
+   "npcs": [
+    4240006
+   ],
+   "label": {
+    "id": 1075018,
+    "text": "[Item Lock]"
+   },
+   "menuButton": 49327,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "ADD_BTN_WARP_61": {
+   "api": "ADD_BTN_WARP_61",
+   "npcs": [
+    4300003
+   ],
+   "label": {
+    "id": 1032027,
+    "text": "[Giant Blazing Wheel] Level 110 / HardLantern"
+   },
+   "menuButton": 49169,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "BTN_8YEAR_RETURN": {
+   "api": "BTN_8YEAR_RETURN",
+   "npcs": [
+    4300134
+   ],
+   "label": {
+    "id": 1146328,
+    "text": "[Deliver 8thAnniversaryCandle]"
+   },
+   "menuButton": 49337,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "BTN_9YEAR_RETURN": {
+   "api": "BTN_9YEAR_RETURN",
+   "npcs": [
+    4300137
+   ],
+   "label": {
+    "id": 1146350,
+    "text": "[Deliver 9thAnniversaryToken]"
+   },
+   "menuButton": 49410,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "NPC_WARP_NEKOISLAND_EXIT": {
+   "api": "NPC_WARP_NEKOISLAND_EXIT",
+   "npcs": [
+    4300146
+   ],
+   "label": {
+    "id": 1149236,
+    "text": "[Leave NekoIsland]"
+   },
+   "menuButton": 49361,
+   "dialog": null,
+   "yesButton": null,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved"
+  },
+  "NPC_WARP_NEKOISLAND_ENTER": {
+   "api": "NPC_WARP_NEKOISLAND_ENTER",
+   "npcs": [
+    4300147
+   ],
+   "label": {
+    "id": 1149237,
+    "text": "[Enter NekoIsland]"
+   },
+   "menuButton": 49360,
+   "dialog": null,
+   "yesButton": null,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved"
+  },
+  "ADD_BTN_WARP_CHUNGUM": {
+   "api": "ADD_BTN_WARP_CHUNGUM",
+   "npcs": [
+    4314004
+   ],
+   "label": null,
+   "menuButton": null,
+   "dialog": null,
+   "yesButton": null,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved"
+  },
+  "NPC_WARP_THEME_50": {
+   "api": "NPC_WARP_THEME_50",
+   "npcs": [
+    4314015,
+    4314016,
+    4314017,
+    4314018,
+    4314019,
+    4314030,
+    4314038,
+    4314039,
+    4314040,
+    4314042,
+    4314048,
+    4314055,
+    4314057
+   ],
+   "label": {
+    "id": 1012025,
+    "text": "[Zephyr Hall]"
+   },
+   "menuButton": 49221,
+   "dialog": 37765,
+   "yesButton": 37766,
+   "dest": {
+    "map": 50,
+    "region": 1,
+    "x": 735,
+    "y": 790
+   },
+   "cost": 30000,
+   "status": "verified-static",
+   "mapName": "ZephyrHall(S)"
+  },
+  "NPC_WARP_THEME_53": {
+   "api": "NPC_WARP_THEME_53",
+   "npcs": [
+    4314015,
+    4314016,
+    4314017,
+    4314018,
+    4314019,
+    4314030,
+    4314031,
+    4314038,
+    4314039,
+    4314040,
+    4314042,
+    4314043,
+    4314048,
+    4314049,
+    4314057,
+    4314072
+   ],
+   "label": {
+    "id": 1012027,
+    "text": "[Evergreen Palace]"
+   },
+   "menuButton": 37836,
+   "dialog": 37837,
+   "yesButton": 37838,
+   "dest": {
+    "map": 53,
+    "region": 4,
+    "x": 3479,
+    "y": 1377
+   },
+   "cost": 55000,
+   "status": "verified-static",
+   "mapName": "EvergreenCity"
+  },
+  "NPC_WARP_TO_DOK_PYO_GONG": {
+   "api": "NPC_WARP_TO_DOK_PYO_GONG",
+   "npcs": [
+    4314023,
+    4318020
+   ],
+   "label": {
+    "id": 1100159,
+    "text": "▶ Move to Dokpio ◀"
+   },
+   "menuButton": 37749,
+   "dialog": 37750,
+   "yesButton": 37751,
+   "dest": {
+    "map": 3,
+    "region": 1,
+    "x": 727,
+    "y": 569
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "AzureRiver"
+  },
+  "ADD_RETURN_WARP_BTN": {
+   "api": "ADD_RETURN_WARP_BTN",
+   "npcs": [
+    4314053,
+    4392001,
+    4392002
+   ],
+   "label": {
+    "id": 1032174,
+    "text": "{0xFF00D7FF}[Exit Tournament hall]{END}"
+   },
+   "menuButton": 30065,
+   "dialog": 30063,
+   "yesButton": 30064,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved"
+  },
+  "NPC_WARP_THEME_56": {
+   "api": "NPC_WARP_THEME_56",
+   "npcs": [
+    4314071,
+    4314074,
+    4314075
+   ],
+   "label": {
+    "id": 300227,
+    "text": "[Kingdom of Angora]"
+   },
+   "menuButton": 37942,
+   "dialog": 37943,
+   "yesButton": 37944,
+   "dest": {
+    "map": 56,
+    "region": 0,
+    "x": 510,
+    "y": 627
+   },
+   "cost": 300000,
+   "status": "verified-static",
+   "note": "region pushed from EBX (zero register in the dispatcher)",
+   "mapName": "GreenPlain[Ruin] "
+  },
+  "NPC_WARP_THEME_67": {
+   "api": "NPC_WARP_THEME_67",
+   "npcs": [
+    4314071,
+    4314072,
+    4314074
+   ],
+   "label": {
+    "id": 300229,
+    "text": "[HangingGarden]"
+   },
+   "menuButton": 37984,
+   "dialog": 37985,
+   "yesButton": 37986,
+   "dest": {
+    "map": 67,
+    "region": 2,
+    "x": 1800,
+    "y": 1200
+   },
+   "cost": 550000,
+   "status": "verified-static",
+   "mapName": "LowerHangingGarden"
+  },
+  "NPC_WARP_THEME_63": {
+   "api": "NPC_WARP_THEME_63",
+   "npcs": [
+    4314071,
+    4314072,
+    4314075
+   ],
+   "label": {
+    "id": 300226,
+    "text": "[미번역]454"
+   },
+   "menuButton": 37981,
+   "dialog": 37982,
+   "yesButton": 37983,
+   "dest": {
+    "map": 63,
+    "region": 3,
+    "x": 629,
+    "y": 742
+   },
+   "cost": 500000,
+   "status": "verified-static",
+   "mapName": "Burning Ruins[M]"
+  },
+  "ADD_NPC_WARP_B": {
+   "api": "ADD_NPC_WARP_B",
+   "npcs": [
+    4315011
+   ],
+   "label": {
+    "id": 1012055,
+    "text": "[Move to Hidden Dragon Gorge]"
+   },
+   "menuButton": 49030,
+   "dialog": 37538,
+   "yesButton": 37049,
+   "dest": {
+    "map": 14,
+    "region": 21,
+    "x": 110,
+    "y": 835
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "hiddenDragonGorge[1]"
+  },
+  "ADD_NPC_WARP_A": {
+   "api": "ADD_NPC_WARP_A",
+   "npcs": [
+    4315012
+   ],
+   "label": {
+    "id": 1032070,
+    "text": "{0xFF00D7FF}[W-what the...?!  Argh-!]{END}"
+   },
+   "menuButton": 49029,
+   "dialog": 37537,
+   "yesButton": 37047,
+   "dest": {
+    "map": 13,
+    "region": 21,
+    "x": 70,
+    "y": 4125
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "hiddenDragonMountain[1]"
+  },
+  "NPC_WARP_BLOOD_ROOM": {
+   "api": "NPC_WARP_BLOOD_ROOM",
+   "npcs": [
+    4315021
+   ],
+   "label": {
+    "id": 1074106,
+    "text": "Use Inferno Amulet."
+   },
+   "menuButton": 49103,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "NPC_WARP_THEME_22": {
+   "api": "NPC_WARP_THEME_22",
+   "npcs": [
+    4315022
+   ],
+   "label": {
+    "id": 1111008,
+    "text": "Yes, I want to quit this stage and exit."
+   },
+   "menuButton": 49102,
+   "dialog": 37690,
+   "yesButton": 37073,
+   "dest": {
+    "map": 25,
+    "region": 1,
+    "x": 3510,
+    "y": 1276
+   },
+   "cost": 18000,
+   "status": "unverified",
+   "mapName": "HermitTown(S)",
+   "note": "label/dialog resolve to the Hermit Town path (same dialog as THEME_25); THEME_22 has branches not traced"
+  },
+  "ADD_TOWER_ESCAPE_BTN": {
+   "api": "ADD_TOWER_ESCAPE_BTN",
+   "npcs": [
+    4315023
+   ],
+   "label": {
+    "id": 1012054,
+    "text": "[Escape Tower of Fate]"
+   },
+   "menuButton": 49057,
+   "dialog": null,
+   "yesButton": null,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved"
+  },
+  "NPC_WARP_TO_PAINROOM": {
+   "api": "NPC_WARP_TO_PAINROOM",
+   "npcs": [
+    4315025
+   ],
+   "label": {
+    "id": 1032218,
+    "text": "{0xFF00D7FF}[Chamber of Pain (1)]{END}"
+   },
+   "menuButton": 49298,
+   "dialog": 37886,
+   "yesButton": 37887,
+   "dest": {
+    "map": 22,
+    "region": 11,
+    "x": 2335,
+    "y": 2020
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "ChamberofPain[1]"
+  },
+  "NPC_WARP_TO_SADROOM": {
+   "api": "NPC_WARP_TO_SADROOM",
+   "npcs": [
+    4315025
+   ],
+   "label": {
+    "id": 1032219,
+    "text": "{0xFF00D7FF}[Chamber of Grief (1)]{END}"
+   },
+   "menuButton": 49299,
+   "dialog": 37888,
+   "yesButton": 37889,
+   "dest": {
+    "map": 23,
+    "region": 1,
+    "x": 1610,
+    "y": 1070
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "ChamberofGrief[1]"
+  },
+  "NPC_WARP_TO_LIFEROOM": {
+   "api": "NPC_WARP_TO_LIFEROOM",
+   "npcs": [
+    4315025
+   ],
+   "label": {
+    "id": 1032220,
+    "text": "{0xFF00D7FF}[Chamber of Fate (1)]{END}"
+   },
+   "menuButton": 49300,
+   "dialog": 37890,
+   "yesButton": 37891,
+   "dest": {
+    "map": 23,
+    "region": 11,
+    "x": 665,
+    "y": 3000
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "ChamberofFate[1]"
+  },
+  "NPC_WARP_THEME_36_1": {
+   "api": "NPC_WARP_THEME_36_1",
+   "npcs": [
+    4316009
+   ],
+   "label": {
+    "id": 1032118,
+    "text": "{0xFF00D7FF}[Move to Destroyed Tryst]{END}"
+   },
+   "menuButton": 49205,
+   "dialog": 37745,
+   "yesButton": 37746,
+   "dest": {
+    "map": 36,
+    "region": 1,
+    "x": 830,
+    "y": 560
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "DestroyedTryst"
+  },
+  "WarpTaeULMove": {
+   "api": "WarpTaeULMove",
+   "npcs": [
+    4316012
+   ],
+   "label": {
+    "id": 1032098,
+    "text": "[Move]"
+   },
+   "menuButton": 37696,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "NPC_WARP_THEME_37": {
+   "api": "NPC_WARP_THEME_37",
+   "npcs": [
+    4316013
+   ],
+   "label": {
+    "id": 1032217,
+    "text": "[Move to Conch Ferry]"
+   },
+   "menuButton": 49126,
+   "dialog": 37717,
+   "yesButton": 37718,
+   "dest": {
+    "map": 37,
+    "region": 0,
+    "x": 950,
+    "y": 720
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "ConchFerry"
+  },
+  "ADD_NPC_WARP_CHUNGYAKANG": {
+   "api": "ADD_NPC_WARP_CHUNGYAKANG",
+   "npcs": [
+    4318014
+   ],
+   "label": {
+    "id": 1012133,
+    "text": "{0xFF00D7FF}[Return to Azure River]{END}"
+   },
+   "menuButton": 49062,
+   "dialog": 37636,
+   "yesButton": 37072,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "region comes from register ESI (not a literal); map 3 x 450 y 800"
+  },
+  "ADD_NPC_WARP_WARRIOR": {
+   "api": "ADD_NPC_WARP_WARRIOR",
+   "npcs": [
+    4318020
+   ],
+   "label": {
+    "id": 1032090,
+    "text": "[미번역]1788"
+   },
+   "menuButton": 49107,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "ADD_WARP_YANGTEMPLE": {
+   "api": "ADD_WARP_YANGTEMPLE",
+   "npcs": [
+    4318027
+   ],
+   "label": {
+    "id": 1032053,
+    "text": "{0xFF00D7FF}[Invade Haunted Castle]{END}"
+   },
+   "menuButton": 49265,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "NPC_WARP_THEME_34": {
+   "api": "NPC_WARP_THEME_34",
+   "npcs": [
+    4320002
+   ],
+   "label": {
+    "id": 1032212,
+    "text": "[Move to Old Ferry]"
+   },
+   "menuButton": 49125,
+   "dialog": 37715,
+   "yesButton": 37716,
+   "dest": {
+    "map": 34,
+    "region": 6,
+    "x": 1075,
+    "y": 1290
+   },
+   "cost": 30000,
+   "status": "verified-static",
+   "mapName": "OldFerry[6]"
+  },
+  "NPC_WARP_GUARD_TO_SUNYOOGOK": {
+   "api": "NPC_WARP_GUARD_TO_SUNYOOGOK",
+   "npcs": [
+    4321002
+   ],
+   "label": {
+    "id": 1032074,
+    "text": "{0xFF00D7FF}[Enter Sunyu Vale]{END}"
+   },
+   "menuButton": 37767,
+   "dialog": 37768,
+   "yesButton": 37769,
+   "dest": {
+    "map": 51,
+    "region": 4,
+    "x": 59,
+    "y": 494
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "SunyuVale[4]"
+  },
+  "NPC_WARP_THEME_51_19": {
+   "api": "NPC_WARP_THEME_51_19",
+   "npcs": [
+    4322011
+   ],
+   "label": {
+    "id": 1032175,
+    "text": "{0xFF00D7FF}[Heaven's Column]{END}"
+   },
+   "menuButton": 37842,
+   "dialog": 37843,
+   "yesButton": 37844,
+   "dest": {
+    "map": 51,
+    "region": 19,
+    "x": 512,
+    "y": 1014
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "ColumnOfHeaven"
+  },
+  "ADD_BTN_HELL_BACKSTREET": {
+   "api": "ADD_BTN_HELL_BACKSTREET",
+   "npcs": [
+    4323009
+   ],
+   "label": {
+    "id": 1032198,
+    "text": "{0xFF00D7FF}[ Angora Town Alley ]{END}"
+   },
+   "menuButton": 49170,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "ADD_BTN_HELL_OUTSKIRTS": {
+   "api": "ADD_BTN_HELL_OUTSKIRTS",
+   "npcs": [
+    4323009
+   ],
+   "label": {
+    "id": 1032199,
+    "text": "{0xFF00D7FF}[ Suburb of Angora Town ]{END}"
+   },
+   "menuButton": 49171,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "ADD_BTN_HELL_DARKROAD": {
+   "api": "ADD_BTN_HELL_DARKROAD",
+   "npcs": [
+    4323009
+   ],
+   "label": {
+    "id": 1032200,
+    "text": "{0xFF00D7FF}[ Dark Road of Angora Town ]{END}"
+   },
+   "menuButton": 49173,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "ADD_BTN_HELL_TOWN_WAR": {
+   "api": "ADD_BTN_HELL_TOWN_WAR",
+   "npcs": [
+    4323009
+   ],
+   "label": {
+    "id": 1032201,
+    "text": "{0xFF00D7FF}[ Angora Town MonsterPost ]{END}"
+   },
+   "menuButton": 49174,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "NPC_WARP_SILENCE_TEMPLE1": {
+   "api": "NPC_WARP_SILENCE_TEMPLE1",
+   "npcs": [
+    4324001,
+    4324006,
+    4324012
+   ],
+   "label": {
+    "id": 1032213,
+    "text": "[ Deep Spot Silent Temple[1] ] "
+   },
+   "menuButton": 49175,
+   "dialog": 37954,
+   "yesButton": 37955,
+   "dest": {
+    "map": 64,
+    "region": 63,
+    "x": 187,
+    "y": 694
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "DeepSpotSilentTemple[1]"
+  },
+  "NPC_WARP_SILENCE_TEMPLE2": {
+   "api": "NPC_WARP_SILENCE_TEMPLE2",
+   "npcs": [
+    4324001,
+    4324006,
+    4324012
+   ],
+   "label": {
+    "id": 1032214,
+    "text": "[ Deep Spot Silent Temple[2] ]"
+   },
+   "menuButton": 49176,
+   "dialog": 37956,
+   "yesButton": 37957,
+   "dest": {
+    "map": 64,
+    "region": 65,
+    "x": 99,
+    "y": 696
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "DeepSpotSilentTemple[2]"
+  },
+  "NPC_WARP_SILENCE_TEMPLE3": {
+   "api": "NPC_WARP_SILENCE_TEMPLE3",
+   "npcs": [
+    4324001,
+    4324006,
+    4324012
+   ],
+   "label": {
+    "id": 1032215,
+    "text": "[ Deep Spot Silent Temple[3] ]"
+   },
+   "menuButton": 49177,
+   "dialog": 37958,
+   "yesButton": 37959,
+   "dest": {
+    "map": 64,
+    "region": 87,
+    "x": 97,
+    "y": 696
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "DeepSpotSilentTemple[3]"
+  },
+  "NPC_WARP_SILENCE_TEMPLE4": {
+   "api": "NPC_WARP_SILENCE_TEMPLE4",
+   "npcs": [
+    4324012
+   ],
+   "label": {
+    "id": 1032216,
+    "text": "[ Silent Temple Altar ]"
+   },
+   "menuButton": 49178,
+   "dialog": 37960,
+   "yesButton": 37961,
+   "dest": {
+    "map": 64,
+    "region": 64,
+    "x": 440,
+    "y": 680
+   },
+   "cost": null,
+   "status": "verified-static",
+   "mapName": "SilentTempleAltar"
+  },
+  "BTN_HWANGCHUN_EXIT": {
+   "api": "BTN_HWANGCHUN_EXIT",
+   "npcs": [
+    4391009
+   ],
+   "label": {
+    "id": 1032080,
+    "text": "{0xFF00D7FF}[Exit Netherworld Gate]{END}"
+   },
+   "menuButton": 37860,
+   "dialog": 37862,
+   "yesButton": 37864,
+   "dest": null,
+   "cost": null,
+   "status": "server-decides",
+   "mapName": null,
+   "note": "client sends map/region/x/y = -1 (0xFFFF): the server picks the destination"
+  },
+  "BTN_HWANGCHUN_ENTER": {
+   "api": "BTN_HWANGCHUN_ENTER",
+   "npcs": [
+    4391010
+   ],
+   "label": {
+    "id": 1032079,
+    "text": "{0xFF00D7FF}[Enter Netherworld Gate]{END}"
+   },
+   "menuButton": 37859,
+   "dialog": 37861,
+   "yesButton": 37863,
+   "dest": null,
+   "cost": null,
+   "status": "server-decides",
+   "mapName": null,
+   "note": "client sends map/region/x/y = -1 (0xFFFF): the server picks the destination"
+  },
+  "ADD_NPC_WARP_INDUN": {
+   "api": "ADD_NPC_WARP_INDUN",
+   "npcs": [
+    4391011,
+    4391021,
+    4391031,
+    4391041,
+    4391911
+   ],
+   "label": {
+    "id": 1032025,
+    "text": "[GiantDokebi] Level 60 / NormalLantern"
+   },
+   "menuButton": 49119,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "ADD_NPC_WARP_INDUN2": {
+   "api": "ADD_NPC_WARP_INDUN2",
+   "npcs": [
+    4391051,
+    4391061,
+    4391071,
+    4391081,
+    4391091
+   ],
+   "label": {
+    "id": 1032028,
+    "text": "[Enter Netherworld]"
+   },
+   "menuButton": 49152,
+   "dialog": 49123,
+   "yesButton": 49124,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "destination chosen at runtime by FUN_124d110 (several hard-coded exits)"
+  },
+  "ADD_BTN_INDUN_GOD_OF_TREE": {
+   "api": "ADD_BTN_INDUN_GOD_OF_TREE",
+   "npcs": [
+    4391112
+   ],
+   "label": {
+    "id": 1032259,
+    "text": "[GiantTreeSpiritWar] Level 160 / HardLantern"
+   },
+   "menuButton": 49352,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  },
+  "ADD_NPC_WARP_INDUN_GHOST": {
+   "api": "ADD_NPC_WARP_INDUN_GHOST",
+   "npcs": [
+    4391911
+   ],
+   "label": {
+    "id": 1032026,
+    "text": "[Raging GiantDokebi] Level 110 / HardLantern"
+   },
+   "menuButton": 49167,
+   "dialog": 31102,
+   "yesButton": 31002,
+   "dest": null,
+   "cost": null,
+   "status": "unresolved",
+   "note": "first dialog found is the generic message box 0x797e (error/notice branch); real action not traced"
+  }
+ }
+}
