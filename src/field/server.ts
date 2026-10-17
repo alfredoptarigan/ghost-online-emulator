@@ -124,6 +124,7 @@ import { storeBuy } from "./npcstore.js";
 import { loadPhantoms, phantomMuls, unsealItem } from "./phantom.js";
 import { ssAttr, ssMaxLevel, ssSkill, ssSkillClients, ssSkillCost, ssSkillHeal, ssSyncJobSkills } from "./ssskills.js";
 import { beltAbsorb, beltCheckWorn, beltDecay, beltExpMul, beltPacket, beltReset } from "./belt.js";
+import { expireSsBuffs, isSsBuffItem, loadSsBuffs, ssRecover, ssUse, ssUseVisual, startSsBuff } from "./ssuse.js";
 import { recomputeSsStats, refreshSsWeapon, isSsChar, ssExpForLevel, SS_STAT_POINTS_PER_LEVEL, SS_SKILL_POINTS_PER_LEVEL } from "./ssstats.js";
 import { buildQuickSlotAll, saveQuickSlot } from "./hotkeys.js";
 import {
@@ -1705,6 +1706,34 @@ async function tryApplySpendRecover(p: Player, itemId: number): Promise<void> {
   sendVital(p);
 }
 
+/**
+ * Soul Saver spend item (C 0x6F) by its item.itm use type (ssuse.ts): potions, timed buffs, torch/firework visuals.
+ * Items whose effect this server does not implement are kept (the Ghost spend tables use other item ids).
+ */
+async function useSsSpend(p: Player, itemId: number, slot: number): Promise<void> {
+  const rec = ssRecover(itemId, p.maxHp, p.maxMp);
+  const buff = isSsBuffItem(itemId);
+  const visual = ssUseVisual(itemId);
+  if (!rec && !buff && !visual) {
+    const u = ssUse(itemId);
+    console.log(`[spend] ss no effect char=${p.charId} item=${itemId} use=${u ? `${u.type},${u.value},${u.secs}` : "-"} (kept)`);
+    send(p, notice("This item cannot be used on this server yet.", 3));
+    return;
+  }
+  if (rec && !p.alive) return;
+  if (visual) broadcastMap(p.map, p.region, useSpendStartPkt(p.charId, p.x, p.y, itemId, 3, slot));
+  if (!(await removeInvQty(p.charId, 3, slot, 1))) return;
+  if (rec) {
+    p.hp = Math.min(p.maxHp, p.hp + rec.hp);
+    p.mp = Math.min(p.maxMp, p.mp + rec.mp);
+    await execute("UPDATE characters SET chp=?, cmp=? WHERE ID=?", [p.hp, p.mp, p.charId]);
+    sendVital(p);
+  }
+  if (buff) for (const out of (await startSsBuff(p.charId, itemId)) ?? []) send(p, out);
+  for (const out of await refreshBagPackets(p.charId, 3, p.magic || 0x0037)) send(p, out);
+  console.log(`[spend] ss char=${p.charId} item=${itemId} hp=${p.hp}/${p.maxHp} mp=${p.mp}/${p.maxMp}${buff ? " buff" : ""}${visual ? " visual" : ""}`);
+}
+
 /** Gift/Treasure/Christmas boxes + Lucky Spring / Golden Xmas sox. Returns true if handled. */
 async function tryHandleSpecialSpend(p: Player, itemId: number): Promise<boolean> {
   if (!isSpecialSpendItem(itemId)) return false;
@@ -2846,6 +2875,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       }
     }
     p.fieldEntered = true;
+    if (p.soulSaver) for (const out of await loadSsBuffs(p.charId)) send(p, out); // running item buff icons
     for (const d of dropsOnMap(p.map, p.region)) send(p, buildDropSpawn(d, { settled: true }));
     for (const shop of listActivePShops(p.map, p.region)) {
       send(p, buildPShopStartPkt(shop.charId, shop.name, shop.kind));
@@ -2903,6 +2933,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
         }
       }
       p.fieldEntered = true;
+      if (p.soulSaver) for (const out of await loadSsBuffs(p.charId)) send(p, out);
       for (const d of dropsOnMap(warpMap, warpRegion)) send(p, buildDropSpawn(d, { settled: true }));
       for (const shop of listActivePShops(warpMap, warpRegion)) {
         send(p, buildPShopStartPkt(shop.charId, shop.name, shop.kind));
@@ -3594,6 +3625,10 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       await giveGifts(p, openGiftBox(itemId));
       return;
     }
+    if (p.soulSaver) {
+      await useSsSpend(p, itemId, slot);
+      return;
+    }
     if (isEffectSpendItem(itemId)) {
       broadcastMap(p.map, p.region, useSpendStartPkt(p.charId, p.x, p.y, itemId, 3, slot));
     }
@@ -3742,6 +3777,14 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
   await loadCashShopFromDb();
   await loadPrices();
   await loadMonsters();
+
+  // Soul Saver item buffs: remove the icons of the ones that ran out.
+  setInterval(() => {
+    for (const { charId, packets } of expireSsBuffs()) {
+      const pl = players.get(charId);
+      if (pl?.soulSaver) for (const out of packets) send(pl, out);
+    }
+  }, 10_000);
 
   // Soul Saver belt: 1 point per minute.
   setInterval(() => {
