@@ -106,6 +106,8 @@ export const config = {
   channelPort: num(process.env.CHANNEL_PORT, 15013),
   fieldHost: process.env.FIELD_HOST ?? "127.0.0.1",
   fieldPort: num(process.env.FIELD_PORT, 15023),
+  /** Field port for the Soul Saver client (different hello magic/token). */
+  ssFieldPort: num(process.env.SS_FIELD_PORT, 15123),
   udpPort: num(process.env.UDP_PORT, 13997),
   /** Primary messenger port (EN client default 17201). */
   messengerPort: num(process.env.MESSENGER_PORT, 17201),

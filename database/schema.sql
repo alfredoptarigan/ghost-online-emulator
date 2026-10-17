@@ -212,6 +212,14 @@ CREATE TABLE `quests` (
   KEY `char_quest` (`charid`, `questid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
 
+-- Soul Saver Monster Encyclopedia: registered pieces per monster (bits 0..8 = pieces 1..9).
+CREATE TABLE `monster_book` (
+  `charid` int NOT NULL,
+  `template` int NOT NULL,
+  `bits` int NOT NULL DEFAULT 0,
+  PRIMARY KEY (`charid`, `template`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+
 DROP TABLE IF EXISTS `cash_inven`;
 CREATE TABLE `cash_inven` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -251,6 +259,7 @@ CREATE TABLE `pets` (
   `hp` int NOT NULL DEFAULT 100,
   `mp` int NOT NULL DEFAULT 100,
   `exp` int NOT NULL DEFAULT 0,
+  `iscash` smallint NOT NULL DEFAULT 0,
   `type` int NOT NULL DEFAULT 5,
   `slot` int NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),

@@ -1,9 +1,10 @@
 import net from "node:net";
+import { SS_DEFAULT_BODY } from "../field/soulsaver.js";
 import type { RowDataPacket } from "mysql2";
 import { config } from "../config.js";
 import { query, execute, withConnection } from "../db.js";
 import { peelGame, opcodeOf, readCString, writeCString, writeHeader, logPkt, bufToHex } from "../net/packet.js";
-import { decodePassword, encodePassword } from "../login/passwordCodec.js";
+import { decodePassword, isMd5Hex, passwordMatches } from "../login/passwordCodec.js";
 
 /** Game4 = 0x0105 (4 char slots / 368B); en-client = 0x0037 (2 slots / 192B). */
 const DEFAULT_MAGIC = 0x0105;
@@ -16,6 +17,8 @@ type Client = {
   magic: number;
   /** Session token from request header +8; en-client echoes [0x824d10]. */
   unk: number;
+  /** Soul Saver client (INET password decodes to md5 hex); uses the 1584-byte CHARSTATUS. */
+  soulSaver: boolean;
 };
 
 /** Match legacy _GETACCOUNTID: C-string at +17 skips leading "INET ", then
@@ -51,21 +54,25 @@ function parseCredentials(pkt: Buffer): { username: string; password: string; ke
   return { username: "", password: "", key: null, raw };
 }
 
+function isSoulSaverInet(pkt: Buffer): boolean {
+  const { password, key } = parseCredentials(pkt);
+  const plain = key != null ? decodePassword(password, key) : null;
+  return plain != null && isMd5Hex(plain);
+}
+
 async function getAccountId(pkt: Buffer): Promise<number> {
   const { username, password, key } = parseCredentials(pkt);
   if (!username) return 0;
-  const rows = await query<RowDataPacket[]>("SELECT password, accountid FROM users WHERE username = ?", [username]);
+  // Soul Saver sends the username uppercased.
+  const rows = await query<RowDataPacket[]>(
+    "SELECT password, accountid FROM users WHERE LOWER(username) = LOWER(?)",
+    [username],
+  );
   if (!rows.length) {
     console.log("[channel] auth fail: unknown user");
     return 0;
   }
-  const dbPass = String(rows[0].password);
-  const plain = key != null ? decodePassword(password, key) : null;
-  const ok =
-    dbPass === password ||
-    (key != null && encodePassword(dbPass, key) === password) ||
-    (plain != null && dbPass === plain) ||
-    (plain != null && dbPass.toLowerCase() === plain.toLowerCase());
+  const ok = passwordMatches(String(rows[0].password), password, key);
   if (!ok) {
     console.log(`[channel] auth fail: bad password for user=${username}`);
     return 0;
@@ -148,6 +155,50 @@ async function charStatus(accountId: number, magic = DEFAULT_MAGIC, unk = 0): Pr
     buf.writeUInt32LE(eq[11] ?? 0, base + 76); // clothes
     buf.writeUInt32LE(eq[4] ?? 0, base + 80); // cape
     buf.writeUInt32LE(eq[7] ?? 0, base + 84); // hair
+  }
+  return buf;
+}
+
+/**
+ * Soul Saver CHARSTATUS (op 0x09), from an official capture (2026-10-16):
+ * 16-byte header (+12 = char count), 13 slots × 120 bytes, 8-byte tail (char count u32, 1 u32).
+ * Slot: name[20], title[20] ("Wanderer" for a new char), +40 slot-open flag (first 4 slots),
+ * +41 sex, +42 level, +43 job, +44..+59 flags copied from the capture,
+ * +60 equipment u32s in the Ghost Online order (weapon, armor, faceUpper, faceLower, hat, eye, clothes, cape, hair).
+ */
+const SS_SLOTS = 13;
+const SS_SLOT_SIZE = 120;
+const SS_OPEN_SLOTS = 4;
+
+async function ssCharStatus(accountId: number, unk = 0): Promise<Buffer> {
+  const chars = await query<RowDataPacket[]>(
+    "SELECT ID, name, sex, level, job FROM characters WHERE userid = ? ORDER BY ID",
+    [accountId],
+  );
+  const total = 16 + SS_SLOTS * SS_SLOT_SIZE + 8;
+  const buf = Buffer.alloc(total, 0);
+  writeHeader(buf, 0x0009, total, DEFAULT_MAGIC, unk);
+  const n = Math.min(chars.length, SS_OPEN_SLOTS);
+  buf.writeUInt32LE(n, 12);
+  buf.writeUInt32LE(n, total - 8);
+  buf.writeUInt32LE(1, total - 4);
+  for (let i = 0; i < SS_OPEN_SLOTS; i++) buf.writeUInt8(1, 16 + i * SS_SLOT_SIZE + 40);
+
+  const equips = await getEquippedBatch(chars.slice(0, n).map((c) => Number(c.ID)));
+  for (let i = 0; i < n; i++) {
+    const c = chars[i]!;
+    const base = 16 + i * SS_SLOT_SIZE;
+    writeCString(buf, base, String(c.name ?? ""), 20);
+    writeCString(buf, base + 20, "Wanderer", 20);
+    buf.writeUInt8(Number(c.sex ?? 0), base + 41);
+    buf.writeUInt8(Number(c.level ?? 1), base + 42);
+    buf.writeUInt8(Number(c.job ?? 0), base + 43);
+    Buffer.from("ff0000ff000001000100010001000000", "hex").copy(buf, base + 44);
+    const eq = equips.get(Number(c.ID)) ?? {};
+    [0, 1, 9, 12, 6, 8, 11, 4, 7].forEach((pos, k) => buf.writeUInt32LE(eq[pos] ?? 0, base + 60 + k * 4));
+    buf.writeUInt32LE(SS_DEFAULT_BODY, base + 104); // base body; 0 = invisible on select screen
+    buf.writeUInt32LE(1, base + 108);
+    buf.writeUInt32LE(1, base + 112);
   }
   return buf;
 }
@@ -261,12 +312,29 @@ async function handlePacket(client: Client, pkt: Buffer): Promise<void> {
       console.log("[channel] login rejected — no CHARSTATUS sent");
       return;
     }
-    const list = await charStatus(aid, client.magic, client.unk);
+    client.soulSaver = isSoulSaverInet(pkt);
+    const list = client.soulSaver ? await ssCharStatus(aid, client.unk) : await charStatus(aid, client.magic, client.unk);
     client.sock.write(list);
     console.log(
       `[channel] CHARSTATUS sent account=${aid} magic=0x${client.magic.toString(16)} bytes=${list.length} head=${bufToHex(list.subarray(0, 16))}`,
     );
     logPkt("OUT", "channel CHARSTATUS", list);
+  } else if (op === 0x000b && client.soulSaver) {
+    // Soul Saver sends 0x0B (01 00 00 00 01 00 00 00) on the create screen; official server echoes it.
+    client.sock.write(pkt);
+  } else if (op === 0x000a && client.soulSaver) {
+    if (!client.accountId) return;
+    // Same layout as Ghost Online plus a u32 job at +52; official server answers with CHARSTATUS.
+    const n = await createChar(client.accountId, pkt);
+    if (n > 0 && pkt.length >= 56) {
+      await execute("UPDATE characters SET job = ? WHERE userid = ? AND name = ?", [
+        pkt.readUInt32LE(52),
+        client.accountId,
+        readCString(pkt, 12, 20),
+      ]);
+    }
+    console.log(`[channel] soulsaver create account=${client.accountId} chars=${n}`);
+    client.sock.write(await ssCharStatus(client.accountId, client.unk));
   } else if (op === 0x000a) {
     if (!client.accountId) return;
     const t0 = Date.now();
@@ -292,7 +360,7 @@ async function handlePacket(client: Client, pkt: Buffer): Promise<void> {
 
 export function startChannelServer(): net.Server {
   const server = net.createServer((sock) => {
-    const client: Client = { sock, buf: Buffer.alloc(0), accountId: 0, magic: DEFAULT_MAGIC, unk: 0 };
+    const client: Client = { sock, buf: Buffer.alloc(0), accountId: 0, magic: DEFAULT_MAGIC, unk: 0, soulSaver: false };
     console.log("[channel] connect from", sock.remoteAddress, sock.remotePort);
 
     sock.on("data", async (chunk) => {

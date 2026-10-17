@@ -5,11 +5,23 @@ import { config, rates } from "../config.js";
 import { query, execute } from "../db.js";
 import { frameAA55, peelAA55, hexToBuf, logPkt, bufToHex } from "../net/packet.js";
 import { getOnlineCount } from "../net/online.js";
-import { decodePassword, encodePassword, readPasswordKey } from "./passwordCodec.js";
+import { decodePassword, isMd5Hex, passwordMatches, readPasswordKey } from "./passwordCodec.js";
 import type { RowDataPacket } from "mysql2";
 
 const VALIDPAS = hexToBuf("AA550500310000E80355AA");
 const INVALIDPAS = hexToBuf("AA550500310D00000055AA");
+/** Soul Saver LOGIN_ACK as sent by the official server (15-byte payload; fields after status unknown). */
+const SS_VALIDPAS = hexToBuf("AA550F0031000000008023000000000000000055AA");
+
+/**
+ * Soul Saver LOGIN_ACK payload: 31 | status | cyber-cafe | GM level | ... The client only sends "//" chat
+ * commands (COMMAND 0x10) when the GM level byte (stored at 0x19d58f0) is 1 or 2.
+ */
+function ssLoginAck(gm: number): Buffer {
+  const out = Buffer.from(SS_VALIDPAS);
+  out[7] = Math.max(0, Math.min(2, gm | 0));
+  return out;
+}
 
 /** Redirect client to field 127.0.0.1:15023 */
 const LPACKET = hexToBuf(
@@ -140,21 +152,27 @@ function serverListPacket(): Buffer {
   }
 }
 
-async function checkUser(frame: Buffer): Promise<boolean> {
+/** `soulSaver` is true when the client sent md5(password); only the Soul Saver client does that. */
+async function checkUser(frame: Buffer): Promise<{ ok: boolean; soulSaver: boolean; gm: number }> {
   // frame includes AA55 header; username at +5 len, +7 name (same as legacy on full packet)
   // Password on the wire is client-encoded; key is u16 LE immediately after password bytes.
-  if (frame.length < 10) return false;
+  const fail = { ok: false, soulSaver: false, gm: 0 };
+  if (frame.length < 10) return fail;
   const uLen = frame[5] ?? 0;
-  if (frame.length < 7 + uLen + 1) return false;
+  if (frame.length < 7 + uLen + 1) return fail;
   const username = frame.subarray(7, 7 + uLen).toString("ascii");
   const pLen = frame[7 + uLen] ?? 0;
   const pOff = 7 + uLen + 2;
-  if (frame.length < pOff + pLen) return false;
+  if (frame.length < pOff + pLen) return fail;
   const wirePass = frame.subarray(pOff, pOff + pLen).toString("ascii");
   const key = readPasswordKey(frame, pOff, pLen);
   const plainFromWire = key != null ? decodePassword(wirePass, key) : null;
+  const soulSaver = plainFromWire != null && isMd5Hex(plainFromWire);
 
-  const rows = await query<RowDataPacket[]>("SELECT password FROM users WHERE username = ?", [username]);
+  // Soul Saver sends the username uppercased; Ghost Online sends it as typed.
+  const rows = await query<RowDataPacket[]>("SELECT password, gm FROM users WHERE LOWER(username) = LOWER(?)", [
+    username,
+  ]);
   if (!rows.length) {
     // Prefer storing decoded plaintext so later logins (new key each time) still work.
     const toStore = plainFromWire ?? wirePass;
@@ -168,29 +186,82 @@ async function checkUser(frame: Buffer): Promise<boolean> {
       rates.defaultGamePoints,
     ]);
     console.log(`[login] created user ${username}`);
-    return true;
+    return { ok: true, soulSaver, gm: 0 };
   }
-  const dbPass = String(rows[0].password);
-  // Accept plaintext DB vs encoded wire, or exact wire match (legacy / already-encoded rows).
-  const ok =
-    (key != null && encodePassword(dbPass, key) === wirePass) ||
-    dbPass === wirePass ||
-    (plainFromWire != null && dbPass === plainFromWire) ||
-    (plainFromWire != null && dbPass.toLowerCase() === plainFromWire.toLowerCase());
+  const ok = passwordMatches(String(rows[0].password), wirePass, key);
   if (!ok) {
     console.log(`[login] bad password for ${username}`);
   }
-  return ok;
+  return { ok, soulSaver, gm: Number(rows[0].gm ?? 0) };
 }
 
-type Client = { sock: net.Socket; buf: Buffer; authed: boolean; id: number };
+/**
+ * Soul Saver login-stage packets (from a capture of the official server, 2026-10-15).
+ * Channel entry layout is identical to Ghost Online; the list header differs.
+ */
+function ssString(s: string): Buffer {
+  const b = Buffer.alloc(2 + s.length);
+  b.writeUInt16LE(s.length, 0);
+  b.write(s, 2, "ascii");
+  return b;
+}
+
+/** SERVERLIST_ACK (0x33): official header, 18 entries (8 live, 10 disabled like the official list). */
+function ssServerListPacket(): Buffer {
+  const header = Buffer.from("33ffffffffffffffffffffffffff01000000000012000000", "hex");
+  const entries: Buffer[] = [];
+  for (let ch = 1; ch <= 18; ch++) {
+    const live = ch <= 8;
+    const ip = ssString("127.0.0.1");
+    const tail = Buffer.alloc(25, 0);
+    // Official list port equals the 0x35 redirect port, i.e. the field server.
+    tail.writeUInt16LE(live ? config.ssFieldPort : 0, 0);
+    tail.writeUInt32LE(live && ch === 1 ? getOnlineCount() : 0, 4);
+    tail.writeUInt32LE(ch <= 12 ? (live ? 300 : 400) : 100, 8);
+    tail.writeUInt32LE(12, 12);
+    tail.writeUInt8(live ? 1 : ch <= 12 ? 0 : 2, 20);
+    tail.writeUInt32LE(live ? config.udpPort : 0, 21);
+    const id = Buffer.alloc(4);
+    id.writeUInt16LE(ch, 0);
+    id.writeUInt16LE(ch, 2);
+    entries.push(id, ip, tail);
+  }
+  return frameAA55(Buffer.concat([header, ...entries]));
+}
+
+/**
+ * 0x3B -> 0x3C: two server ip/port string pairs (official ports 15011 / 15111).
+ * The client sends "INET <key> <user> ..." (op 0x08) to the first pair: that is the channel
+ * (character select) server. The second pair is presumably the messenger.
+ */
+function ssServerAddrPacket(): Buffer {
+  return frameAA55(
+    Buffer.concat([
+      Buffer.from([0x3c]),
+      ssString("127.0.0.1"),
+      ssString(String(config.channelPort)),
+      ssString("127.0.0.1"),
+      ssString(String(config.messengerPort)),
+    ]),
+  );
+}
+
+/** 0x34 (channel select) -> 0x35: status u8, ip, field tcp port u16, unk u16, udp port u32. */
+function ssChannelRedirectPacket(): Buffer {
+  const tail = Buffer.alloc(8, 0);
+  tail.writeUInt16LE(config.ssFieldPort, 0);
+  tail.writeUInt32LE(config.udpPort, 4);
+  return frameAA55(Buffer.concat([Buffer.from([0x35, 0x00]), ssString("127.0.0.1"), tail]));
+}
+
+type Client = { sock: net.Socket; buf: Buffer; authed: boolean; soulSaver: boolean; id: number };
 
 export function startLoginServer(): net.Server {
   let nextId = 1;
   const clients = new Map<net.Socket, Client>();
 
   const server = net.createServer((sock) => {
-    const client: Client = { sock, buf: Buffer.alloc(0), authed: false, id: nextId++ };
+    const client: Client = { sock, buf: Buffer.alloc(0), authed: false, soulSaver: false, id: nextId++ };
     clients.set(sock, client);
     console.log(`[login] connect #${client.id}`);
 
@@ -201,11 +272,33 @@ export function startLoginServer(): net.Server {
       for (const frame of frames) {
         logPkt("IN", `login#${client.id}`, frame);
         try {
+          if (client.authed && client.soulSaver) {
+            // Soul Saver: dispatch on the opcode byte; the server only answers requests.
+            const op = frame[4];
+            const out =
+              op === 0x32 ? ssServerListPacket()
+              : op === 0x3b ? ssServerAddrPacket()
+              : op === 0x34 ? ssChannelRedirectPacket()
+              : null;
+            console.log(`[login] #${client.id} soulsaver op=0x${(op ?? 0).toString(16)} len=${frame.length}`);
+            if (out) {
+              sock.write(out);
+              logPkt("OUT", `login#${client.id} ss`, out);
+            }
+            continue;
+          }
           if (!client.authed) {
-            const ok = await checkUser(frame);
-            const out = ok ? VALIDPAS : INVALIDPAS;
+            const { ok, soulSaver, gm } = await checkUser(frame);
+            const out = ok ? (soulSaver ? ssLoginAck(gm) : VALIDPAS) : INVALIDPAS;
             sock.write(out);
             logPkt("OUT", `login#${client.id}`, out);
+            if (ok && soulSaver) {
+              // Official server sends nothing more; the client asks for the list with 0x32.
+              client.authed = true;
+              client.soulSaver = true;
+              console.log(`[login] #${client.id} auth ok (soulsaver)`);
+              continue;
+            }
             if (ok) {
               client.authed = true;
               // en-client expects a channel list right after auth; don't wait for AA550100.
@@ -238,7 +331,7 @@ export function startLoginServer(): net.Server {
     });
 
     const refresh = setInterval(() => {
-      if (!client.authed || sock.destroyed) return;
+      if (!client.authed || client.soulSaver || sock.destroyed) return;
       try {
         sock.write(serverListPacket());
       } catch {

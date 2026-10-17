@@ -1,6 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { RowDataPacket } from "mysql2";
 import { query, execute } from "../db.js";
-import { rates } from "../config.js";
+import { config, rates } from "../config.js";
 import { writeHeader } from "../net/packet.js";
 import { addItemToInventory, removeInvQty, refreshBagPackets } from "./inventory.js";
 import { ensureBeginnerSkills, buildSkillAll } from "./skills.js";
@@ -85,17 +87,71 @@ const SKILL_REWARDS: Record<number, number> = {
   42: 10301, 43: 10302, 44: 10304, 45: 10303, 46: 10305, 47: 10306, 48: 10307, 49: 10308, 50: 10309, 51: 10310,
 };
 
+/**
+ * Soul Saver quest rules, extracted from the client's zGsp/Script/quest.luc (table qt): requirements,
+ * items given on accept (requstItem), items taken on turn-in (goal.getItem + deleteItem), kill goals and
+ * rewards. Quests 2–51 keep the hand-written tables above (same data, Ghost client parity).
+ */
+type SsQuest = {
+  needLevel?: number;
+  needQuest?: number;
+  accept?: Array<[number, number]>;
+  remove?: Array<[number, number]>;
+  kill?: Array<[number, number]>;
+  money?: number;
+  exp?: number;
+  fame?: number;
+  items?: Array<[number, number]>;
+  skills?: number[];
+};
+
+const SS_QUESTS: Record<number, SsQuest> = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(config.dataDir, "ss_quests.json"), "utf8"));
+  } catch {
+    return {};
+  }
+})();
+
+const isLegacy = (qid: number) => qid >= 2 && qid <= 51;
+
 function supported(qid: number): boolean {
-  return qid >= 2 && qid <= 51;
+  return isLegacy(qid) || SS_QUESTS[qid] != null;
 }
 
-export async function buildQuestAll(cid: number): Promise<Buffer> {
+function killGoal(qid: number): { template: number; count: number } | undefined {
+  if (isLegacy(qid)) return KILL_GOALS[qid];
+  const k = SS_QUESTS[qid]?.kill?.[0];
+  return k ? { template: k[0], count: k[1] } : undefined;
+}
+
+/**
+ * Soul Saver QUEST_ALL (2252 bytes, SetQuest FUN_01365cb0): same slots, but a 2000-byte state table where
+ * each byte holds two quests: '0'+state for quest j+1 plus 10*state for quest j+1001 (bytes 1000.. cover
+ * 2001..4000 the same way). State 0 none, 1 active, 2 done.
+ */
+function ssStateTable(b: Buffer, rows: RowDataPacket[]): void {
+  const base = 252;
+  b.fill(0x30, base, base + 2000);
+  for (const r of rows) {
+    const qid = Number(r.questId);
+    const st = Number(r.questState ?? 0x20);
+    const v = st === 0x31 ? 1 : st === 0x32 ? 2 : 0;
+    if (!v || qid < 1 || qid > 4000) continue;
+    const j = qid <= 2000 ? (qid - 1) % 1000 : 1000 + ((qid - 2001) % 1000);
+    const tens = (qid > 1000 && qid <= 2000) || qid > 3000;
+    b[base + j] = b[base + j]! + (tens ? 10 * v : v);
+  }
+}
+
+export async function buildQuestAll(cid: number, ss = false): Promise<Buffer> {
   const rows = await query<RowDataPacket[]>(
     "SELECT questid AS questId, state AS questState, progress AS completeMonster FROM quests WHERE charid=? ORDER BY state, id",
     [cid],
   );
-  const b = Buffer.alloc(1252, 0);
-  writeHeader(b, 0x0079, 1252);
+  const len = ss ? 2252 : 1252;
+  const b = Buffer.alloc(len, 0);
+  writeHeader(b, 0x0079, len);
   let slot = 0;
   for (const r of rows) {
     if (slot >= 15) break;
@@ -106,6 +162,10 @@ export async function buildQuestAll(cid: number): Promise<Buffer> {
     b.writeUInt8(1, 26 + slot * 16);
     b.writeUInt8(0, 27 + slot * 16);
     slot++;
+  }
+  if (ss) {
+    ssStateTable(b, rows);
+    return b;
   }
   const base = 12 + 15 * 16;
   for (let i = 0; i < 999; i++) b.writeUInt8(0x20, base + i);
@@ -217,7 +277,25 @@ async function jobChange(cid: number, job: number): Promise<Buffer[]> {
   return [await buildSkillAll(cid)];
 }
 
+async function applySsRewards(cid: number, q: SsQuest): Promise<Buffer[]> {
+  const out: Buffer[] = [];
+  for (const [iid, n] of q.remove ?? []) out.push(...(await removeItemById(cid, iid, n)));
+  if (q.money) await addMoney(cid, q.money);
+  if (q.exp) await addExp(cid, q.exp);
+  if (q.fame) await addFame(cid, q.fame);
+  for (const [iid, n] of q.items ?? []) {
+    const bag = await addItemToInventory(cid, iid, n);
+    if (bag >= 0) out.push(...(await refreshBagPackets(cid, bag)));
+  }
+  if (q.skills?.length) {
+    for (const sid of q.skills) await grantSkill(cid, sid);
+    out.push(await buildSkillAll(cid));
+  }
+  return out;
+}
+
 async function applyRewards(cid: number, questId: number): Promise<Buffer[]> {
+  if (!isLegacy(questId)) return applySsRewards(cid, SS_QUESTS[questId]!);
   const out: Buffer[] = [];
   for (const [iid, q] of TURN_IN_ITEMS[questId] ?? []) {
     out.push(...(await removeItemById(cid, iid, q)));
@@ -259,49 +337,54 @@ async function applyRewards(cid: number, questId: number): Promise<Buffer[]> {
   return out;
 }
 
-export async function acceptQuest(cid: number, level: number, questId: number): Promise<Buffer[]> {
-  if (!supported(questId)) return [await buildQuestAll(cid)];
-  const needLv = NEED_LEVEL[questId] ?? 1;
-  if (level < needLv) return [await buildQuestAll(cid)];
-  const needQ = NEED_QUEST[questId];
+export async function acceptQuest(cid: number, level: number, questId: number, ss = false): Promise<Buffer[]> {
+  if (!supported(questId)) return [await buildQuestAll(cid, ss)];
+  const legacy = isLegacy(questId);
+  const needLv = (legacy ? NEED_LEVEL[questId] : SS_QUESTS[questId]!.needLevel) ?? 1;
+  if (level < needLv) return [await buildQuestAll(cid, ss)];
+  const needQ = legacy ? NEED_QUEST[questId] : SS_QUESTS[questId]!.needQuest;
   if (needQ) {
     const prereq = await getRow(cid, needQ);
-    if (!prereq || Number(prereq.questState) !== 0x32) return [await buildQuestAll(cid)];
+    if (!prereq || Number(prereq.questState) !== 0x32) return [await buildQuestAll(cid, ss)];
   }
   const existing = await getRow(cid, questId);
   if (existing) {
     const st = Number(existing.questState);
-    if (st === 0x31 || st === 0x32) return [await buildQuestAll(cid)];
+    if (st === 0x31 || st === 0x32) return [await buildQuestAll(cid, ss)];
     await execute("UPDATE quests SET state=49, progress=0 WHERE id=?", [existing.id]);
   } else {
     await execute("INSERT INTO quests (charid, questid, state, progress) VALUES (?,?,49,0)", [cid, questId]);
   }
   const out: Buffer[] = [];
-  const acceptItem = ACCEPT_ITEMS[questId];
-  if (acceptItem) {
-    const bag = await addItemToInventory(cid, acceptItem, 1);
+  const acceptItems: Array<[number, number]> = legacy
+    ? ACCEPT_ITEMS[questId] ? [[ACCEPT_ITEMS[questId]!, 1]] : []
+    : SS_QUESTS[questId]!.accept ?? [];
+  for (const [iid, n] of acceptItems) {
+    const bag = await addItemToInventory(cid, iid, n);
     if (bag >= 0) out.push(...(await refreshBagPackets(cid, bag)));
   }
-  out.push(await buildQuestAll(cid));
+  out.push(await buildQuestAll(cid, ss));
   return out;
 }
 
-export async function giveUpQuest(cid: number, questId: number): Promise<Buffer[]> {
+export async function giveUpQuest(cid: number, questId: number, ss = false): Promise<Buffer[]> {
   await execute("DELETE FROM quests WHERE charid=? AND questid=?", [cid, questId]);
-  return [await buildQuestAll(cid)];
+  return [await buildQuestAll(cid, ss)];
 }
 
 export type QuestCompleteResult = { packets: Buffer[]; refreshChar: boolean };
 
-export async function completeQuest(cid: number, questId: number): Promise<QuestCompleteResult> {
+export async function completeQuest(cid: number, questId: number, ss = false): Promise<QuestCompleteResult> {
   const row = await getRow(cid, questId);
-  if (!row || Number(row.questState) !== 0x31) {
-    return { packets: [await buildQuestAll(cid)], refreshChar: false };
+  if (!row || Number(row.questState) !== 0x31 || !supported(questId)) {
+    return { packets: [await buildQuestAll(cid, ss)], refreshChar: false };
   }
   await execute("UPDATE quests SET state=50 WHERE charid=? AND questid=?", [cid, questId]);
   const rewardPkts = await applyRewards(cid, questId);
   return {
-    packets: [...rewardPkts, await buildQuestAll(cid), questUpdate(Number(row.completeMonster), questId, 1, 0)],
+    // Soul Saver's 0x80 handler (FUN_01362410) stores +26 as the quest state, so 1 would re-open the quest
+    // in the Quest Alert; send 2 (done).
+    packets: [...rewardPkts, await buildQuestAll(cid, ss), questUpdate(Number(row.completeMonster), questId, ss ? 2 : 1, 0)],
     refreshChar: true,
   };
 }
@@ -314,7 +397,7 @@ export async function onMonsterKill(cid: number, template: number): Promise<Buff
   const out: Buffer[] = [];
   for (const r of rows) {
     const qid = Number(r.questId);
-    const def = KILL_GOALS[qid];
+    const def = killGoal(qid);
     if (!def || def.template !== template) continue;
     let done = Number(r.completeMonster ?? 0);
     if (done >= def.count) continue;
@@ -332,14 +415,15 @@ export async function handleQuestPacket(
   level: number,
   opcode: number,
   pkt: Buffer,
+  ss = false,
 ): Promise<QuestCompleteResult> {
   const qid = pkt.length >= 14 ? pkt.readUInt16LE(12) : 0;
-  if (opcode === 0x007a) return { packets: await acceptQuest(cid, level, qid), refreshChar: false };
-  if (opcode === 0x007b) return { packets: await giveUpQuest(cid, qid), refreshChar: false };
-  if (opcode === 0x007c) return completeQuest(cid, qid);
+  if (opcode === 0x007a) return { packets: await acceptQuest(cid, level, qid, ss), refreshChar: false };
+  if (opcode === 0x007b) return { packets: await giveUpQuest(cid, qid, ss), refreshChar: false };
+  if (opcode === 0x007c) return completeQuest(cid, qid, ss);
   if (opcode === 0x007e) {
     const questId = pkt.length >= 22 ? pkt.readUInt16LE(20) : qid;
-    return completeQuest(cid, questId);
+    return completeQuest(cid, questId, ss);
   }
   if (opcode === 0x007d) {
     const questId = pkt.length >= 18 ? pkt.readUInt16LE(16) : qid;
@@ -354,7 +438,7 @@ export async function handleQuestPacket(
     if (!row || Number(row.questState) !== 0x31) return { packets: [], refreshChar: false };
     return { packets: [questUpdate(Number(row.completeMonster), qid, 1, 0)], refreshChar: false };
   }
-  return { packets: [await buildQuestAll(cid)], refreshChar: false };
+  return { packets: [await buildQuestAll(cid, ss)], refreshChar: false };
 }
 
 /** @deprecated alias */

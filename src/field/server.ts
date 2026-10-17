@@ -16,7 +16,8 @@ import {
 } from "../net/packet.js";
 import { decodeFieldFrame, encodeFieldFrame, type FieldKeys } from "../net/fieldCodec.js";
 import { bumpOnline, setOnlineCount } from "../net/online.js";
-import { decodePassword, encodePassword } from "../login/passwordCodec.js";
+import { passwordMatches } from "../login/passwordCodec.js";
+import { fromSoulSaver, toSoulSaver } from "./soulsaver.js";
 import {
   ensureBeginnerSkills,
   syncJobSkills,
@@ -106,6 +107,7 @@ import {
   type BoxBuff,
 } from "./spend_boxes.js";
 import { handleQuestPacket, onMonsterKill, buildQuestAll } from "./quests.js";
+import { buildMonsterBook, registerPiece } from "./monsterbook.js";
 import { buildQuickSlotAll, saveQuickSlot } from "./hotkeys.js";
 import {
   dispatchPShop,
@@ -204,6 +206,8 @@ type Player = {
   unk: number;
   /** True after connect hello (0x14) was sent with the client's magic. */
   helloSent: boolean;
+  /** Connected on the Soul Saver field port; INIT (0x14) must carry the Soul Saver build token. */
+  soulSaver: boolean;
   /** en-client field stream cipher keys (from hello 0x14). */
   fieldKeys: FieldKeys;
   /** Client's local UDP bind port (8000/8001) learned from move-relay datagrams. */
@@ -234,6 +238,10 @@ function updatePosFromMove(p: Player, pkt: Buffer, op: number): void {
     if ((op === 0x27 || op === 0xdd) && pkt.length >= 24) {
       nx = Math.floor(pkt.readFloatLE(16));
       ny = Math.floor(pkt.readFloatLE(20));
+    } else if (op === 0x29 && p.soulSaver && pkt.length >= 32) {
+      // Soul Saver 0x29 (44 B): side @16, speed @20, x/y floats @24/@28.
+      nx = Math.floor(pkt.readFloatLE(24));
+      ny = Math.floor(pkt.readFloatLE(28));
     } else if ((op === 0x2a || op === 0x29) && pkt.length >= 28) {
       nx = Math.floor(pkt.readFloatLE(20));
       ny = Math.floor(pkt.readFloatLE(24));
@@ -292,13 +300,17 @@ function countOnline(): number {
 
 /** en-client drops raw frames with totalLen > 0x7FFF; Look list is 39212. */
 const FIELD_RAW_MAX = 0x7fff;
+/** Soul Saver: send packets above this size as compressed 0x81 frames. */
+const SS_RAW_MAX = 1024;
 
 function send(p: Player, buf: Buffer): void {
   if (p.sock.destroyed) return;
   // Copy before header rewrite — sock.write is async and may still hold `buf`.
   // Mutating in place corrupts in-flight packets when multiple clients share
   // broadcast buffers (UDP moves, mon info, etc.).
-  let out = Buffer.from(buf);
+  const ss = p.soulSaver ? toSoulSaver(buf, p.charId) : buf;
+  if (!ss) return; // Game4 layout with no Soul Saver mapping yet
+  let out = Buffer.from(ss);
   let op = 0;
   if (out.length >= 12 && p.magic) {
     op = out.readUInt16LE(2);
@@ -316,7 +328,10 @@ function send(p: Player, buf: Buffer): void {
   // Equip/Ability/Pet are < 0x7FFF raw but ~100KB burst still overflows the client's
   // recv window; compressed lists are ~0.3–4KB each and apply reliably.
   const isCashList = op >= 0x11f && op <= 0x127;
-  if ((isCashList || out.length > FIELD_RAW_MAX) && p.magic === 0x0037 && p.fieldKeys) {
+  // Soul Saver: its packet ring buffer overflows on bursts of the larger bag packets (6KB+ each)
+  // ("Dropped N bytes from packet circular buffer" in Ghost.log, then a crash), so compress them.
+  const ssCompress = p.soulSaver && out.length > SS_RAW_MAX;
+  if ((((isCashList || out.length > FIELD_RAW_MAX) && p.magic === 0x0037) || ssCompress) && p.fieldKeys) {
     try {
       const wrapped = encodeFieldFrame(out, p.fieldKeys);
       logPkt("OUT", `field#${p.charId}/0x81`, wrapped);
@@ -506,6 +521,8 @@ const FIELD_CRYPTO_SEED_LO = 0xebd66b29;
 const FIELD_CRYPTO_SEED_HI = 0x2103a92c;
 /** en-client refuses field enter unless hello[+0x10] equals this build token. */
 const EN_CLIENT_HELLO_TOKEN = 0x1e488bf5;
+/** Soul Saver hello: Game4 layout + magic, token@+0x10 = client build 202609228 ("C_U_ver" on the login screen). */
+const SOUL_SAVER_HELLO_TOKEN = 202609228;
 
 let nextHelloId = 200;
 
@@ -520,6 +537,7 @@ function initPacket(
   id: number,
   magic = 0x0037,
   keys?: { key1: number; key2: number },
+  soulSaver = false,
 ): Buffer {
   const b = Buffer.alloc(40, 0);
   writeHeader(b, 0x0014, 40, magic);
@@ -536,7 +554,7 @@ function initPacket(
     b.writeUInt32LE(k2 >>> 0, 0x24);
   } else {
     // Game4 / legacy: seed@+0x10, udp@+0x14, prefix@+0x18, keys@+0x20/+0x24
-    b.writeUInt32LE(0x0c848761, 16);
+    b.writeUInt32LE(soulSaver ? SOUL_SAVER_HELLO_TOKEN : 0x0c848761, 16);
     b.writeUInt16LE(config.udpPort & 0xffff, 20);
     b.writeUInt16LE(0, 22);
     Buffer.from("E2D315013ABB5D52", "hex").copy(b, 24);
@@ -1843,20 +1861,16 @@ async function resolveCharId(
     return null;
   }
 
-  const u = await query<RowDataPacket[]>("SELECT accountid, password, gm FROM users WHERE username = ?", [
-    username,
-  ]);
+  // Soul Saver sends the username uppercased.
+  const u = await query<RowDataPacket[]>(
+    "SELECT accountid, password, gm FROM users WHERE LOWER(username) = LOWER(?)",
+    [username],
+  );
   if (!u.length) {
     console.log("[field] auth fail: unknown user");
     return null;
   }
-  const dbPass = String(u[0]!.password);
-  const plain = key != null ? decodePassword(password, key) : null;
-  const ok =
-    dbPass === password ||
-    (key != null && encodePassword(dbPass, key) === password) ||
-    (plain != null && dbPass === plain) ||
-    (plain != null && dbPass.toLowerCase() === plain.toLowerCase());
+  const ok = passwordMatches(String(u[0]!.password), password, key);
   if (!ok) {
     console.log(`[field] auth fail: bad credentials for user=${username}`);
     return null;
@@ -1866,6 +1880,13 @@ async function resolveCharId(
     "SELECT ID, name FROM characters WHERE userid = ? ORDER BY ID",
     [accountId],
   );
+  // Soul Saver field login (op 0x18, 432 bytes) puts the selected character's name[20] at +268
+  // instead of a slot index.
+  const ssName = pkt.length >= 288 ? readCString(pkt, 268, 20) : "";
+  if (ssName.length > 1) {
+    const idx = chars.findIndex((c) => String(c.name) === ssName);
+    if (idx >= 0) charSlot = idx;
+  }
   if (charSlot >= chars.length) {
     console.log(`[field] auth fail: slot ${charSlot} >= ${chars.length} chars`);
     return null;
@@ -2315,7 +2336,15 @@ async function fishCatchTick(p: Player): Promise<void> {
 }
 
 async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
+  if (p.soulSaver) pkt = fromSoulSaver(pkt);
   const op = opcodeOf(pkt);
+  if (p.soulSaver && op === 0x0738 && pkt.length >= 13) {
+    // Soul Saver stat +10 button: same stat byte @12 as 0x5F; run the 0x5F path ten times.
+    const one = Buffer.from(pkt);
+    one.writeUInt16LE(0x005f, 2);
+    for (let i = 0; i < 10; i++) await handlePacket(p, one);
+    return;
+  }
   console.log(
     `[field] pkt op=0x${op.toString(16)} len=${pkt.length} loggedIn=${p.loggedIn} char=${p.charId}`,
   );
@@ -2437,15 +2466,25 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       await ensureBeginnerSkills(p.charId);
       // Do not syncJobSkills here — original unlocks job skills via master quests.
       // Client needs INIT with real charId (connect hello only has a placeholder id).
-      send(p, initPacket(p.charId, p.magic || 0x0037));
+      send(p, initPacket(p.charId, p.magic || 0x0037, undefined, p.soulSaver));
       console.log(`[field] bound char=${p.charId} name=${p.name} map=${p.map}/${p.region}`);
+      if (p.soulSaver) {
+        // Legacy order: INIT only; the client answers with a second 0x18 and gets the loadout then.
+        // Sending CHAR_ALL/MAP on both 0x18s restarts the map load and can leave the client on
+        // "Loading the field data".
+        p.loggedIn = true;
+        players.set(p.charId, p);
+        countOnline();
+        return;
+      }
     }
     // Send loadout (legacy: CHAR_ALL → skills → quickslot → quests → MAP_INFO).
     // en-client: keep MAP_INFO early (before quests) — MAP last left some clients stuck loading.
     send(p, await charAll(p.charId));
     send(p, await buildSkillAll(p.charId));
     send(p, mapInfo(p));
-    send(p, await buildQuestAll(p.charId));
+    send(p, await buildQuestAll(p.charId, p.soulSaver));
+    if (p.soulSaver) send(p, await buildMonsterBook(p.charId));
     try {
       send(p, await buildQuickSlotAll(p.charId));
     } catch (e) {
@@ -2488,6 +2527,10 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       region: p.region,
     });
     send(p, ep);
+    // Soul Saver caches its player object (0x3c0e14c) only while parsing CHAR_ALL; before the map
+    // load that object does not exist yet and the client stays on "Loading the field data".
+    if (p.soulSaver) send(p, await charAll(p.charId));
+    if (p.soulSaver) send(p, moneyPacket(p.money, 0)); // otherwise the bag shows 0 gold
     // en-client often stays invisible without an explicit SETAVATAR after ENTERPLAYER
     if (p.magic === 0x0037) send(p, await buildSetAvatar(p.charId));
     for (const o of players.values()) {
@@ -2545,6 +2588,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
         region: p.region,
       });
       send(p, ep);
+      if (p.soulSaver) send(p, await charAll(p.charId));
       if (p.magic === 0x0037) send(p, await buildSetAvatar(p.charId));
       for (const o of players.values()) {
         if (o.loggedIn && o.fieldEntered && o.charId !== p.charId && o.map === p.map && o.region === p.region) {
@@ -2868,6 +2912,12 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
 
   // cash shop
   if (op === 0x00e4) {
+    // Soul Saver asks for the mall right after 0xDB. The ~200KB raw burst lands while the client is
+    // still entering the map and can wipe the unprocessed ENTERPLAYER/CHAR_ALL (stuck on loading).
+    if (p.soulSaver) {
+      setTimeout(() => void sendCashMall(p).catch((e) => console.error("[cashshop] delayed send failed", e)), 3000);
+      return;
+    }
     await sendCashMall(p);
     return;
   }
@@ -3109,7 +3159,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
 
   // quests
   if (op >= 0x007a && op <= 0x007f) {
-    const qres = await handleQuestPacket(p.charId, p.level, op, pkt);
+    const qres = await handleQuestPacket(p.charId, p.level, op, pkt, p.soulSaver);
     for (const b of qres.packets) send(p, b);
     if (qres.refreshChar) {
       const row = await loadCharRow(p.charId);
@@ -3159,6 +3209,29 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     if (!rows.length) return;
     const itemId = Number(rows[0]!.itemid);
     if (itemId < 1) return;
+    if (p.soulSaver) {
+      const book = await registerPiece(p.charId, itemId);
+      if (book) {
+        if (!(await removeInvQty(p.charId, 3, slot, 1))) return;
+        if (book.consume) {
+          send(p, book.packet);
+          if (book.reward) {
+            console.log(`[book] char=${p.charId} completed item=${itemId} exp+${book.reward.exp} fame+${book.reward.fame}`);
+            await execute("UPDATE characters SET honor=honor+? WHERE ID=?", [book.reward.fame, p.charId]);
+            const leveled = await grantMonsterExp(p, book.reward.exp);
+            if (!leveled) send(p, await charAll(p.charId)); // reputation is part of CHAR_ALL
+          }
+        } else {
+          // Already registered: the tooltip offers "convert it to gold equal to its reselling price".
+          const gain = sellPrice(itemId, prices);
+          p.money += gain;
+          await execute("UPDATE characters SET money=? WHERE ID=?", [p.money, p.charId]);
+          send(p, moneyPacket(p.money, gain));
+        }
+        for (const out of await refreshBagPackets(p.charId, 3, p.magic || 0x0037)) send(p, out);
+        return;
+      }
+    }
     if (isEffectSpendItem(itemId)) {
       broadcastMap(p.map, p.region, useSpendStartPkt(p.charId, p.x, p.y, itemId, 3, slot));
     }
@@ -3408,6 +3481,7 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
     // Game4=0x0105 (byte0=0x05), en-client=0x0037
     if (magic !== 0x0105 && magic !== 0x0037) return;
     const op = msg.readUInt16LE(2);
+    logPkt("IN", `udp op=${op.toString(16)}`, msg);
     if (!MOVE_OPS.has(op)) return;
     const charId = msg.length >= 16 ? msg.readUInt32LE(12) : 0;
     let p = players.get(charId);
@@ -3428,7 +3502,9 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
     console.log(`[field-udp] ${config.fieldHost}:${config.udpPort}`);
   });
 
-  const tcp = net.createServer((sock) => {
+  // Soul Saver connects on its own port (the login server's 0x35 points there): the hello is
+  // sent before the client speaks, so the client type has to come from the port.
+  const onConnection = (sock: net.Socket, soulSaver: boolean) => {
     const p: Player = {
       sock,
       buf: Buffer.alloc(0),
@@ -3469,9 +3545,10 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
       lastTouchAt: 0,
       pktChain: Promise.resolve(),
       monCombatReady: false,
-      magic: 0x0037,
+      magic: soulSaver ? 0x0105 : 0x0037,
       unk: 0,
       helloSent: false,
+      soulSaver,
       fieldKeys: makeFieldKeys(FIELD_HELLO_KEY1, FIELD_HELLO_KEY2),
       udpPort: 0,
       udpHost: "",
@@ -3486,9 +3563,9 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
     if (nextHelloId > 0x7fffffff) nextHelloId = 200;
     console.log("[field] connect from", sock.remoteAddress, sock.remotePort);
     p.helloSent = true;
-    send(p, initPacket(helloId, p.magic));
+    send(p, initPacket(helloId, p.magic, undefined, soulSaver));
     console.log(
-      `[field] hello 0x14 sent magic=0x${p.magic.toString(16)} id=${helloId} token=0x${EN_CLIENT_HELLO_TOKEN.toString(16)}`,
+      `[field] hello 0x14 sent magic=0x${p.magic.toString(16)} id=${helloId}${soulSaver ? " (soulsaver)" : ""}`,
     );
 
     sock.on("data", (chunk) => {
@@ -3537,6 +3614,16 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
       if (p.loggedIn && p.charId) {
         const leftMap = p.map;
         const leftRegion = p.region;
+        // Only 0x1D/warps wrote charX/charY, so relogging put the player back at the map entry point.
+        if (p.fieldEntered && p.alive && !p.pendingWarp) {
+          void execute("UPDATE characters SET map=?, region=?, charX=?, charY=? WHERE ID=?", [
+            p.map,
+            p.region,
+            p.x,
+            p.y,
+            p.charId,
+          ]).catch((e) => console.error("[field] save position", e));
+        }
         const shopEnd = endPShopIfActive(p.charId);
         if (shopEnd) broadcastMap(leftMap, leftRegion, shopEnd);
         void cancelTradeFor(p, true).catch((e) => console.error("[field] trade cleanup", e));
@@ -3551,10 +3638,15 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
       clearAllSkillEffects(p);
     });
     sock.on("error", () => undefined);
-  });
+  };
 
+  const tcp = net.createServer((sock) => onConnection(sock, false));
   tcp.listen(config.fieldPort, config.fieldHost, () => {
     console.log(`[field] listening ${config.fieldHost}:${config.fieldPort}`);
+  });
+  const ssTcp = net.createServer((sock) => onConnection(sock, true));
+  ssTcp.listen(config.ssFieldPort, config.fieldHost, () => {
+    console.log(`[field] soulsaver listening ${config.fieldHost}:${config.ssFieldPort}`);
   });
 
   return { tcp, udp };

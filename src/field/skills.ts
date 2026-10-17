@@ -134,7 +134,7 @@ async function grantSkillIds(charId: number, ids: number[]): Promise<void> {
   for (const sid of ids) {
     if (sid <= 0) continue;
     const rows = await query<RowDataPacket[]>("SELECT id FROM skills WHERE charid=? AND skillid=?", [charId, sid]);
-    if (!rows.length) await execute("INSERT INTO skills (charid, skillid, points) VALUES (?,?,1)", [charId, sid, 1]);
+    if (!rows.length) await execute("INSERT INTO skills (charid, skillid, points) VALUES (?,?,1)", [charId, sid]);
   }
 }
 

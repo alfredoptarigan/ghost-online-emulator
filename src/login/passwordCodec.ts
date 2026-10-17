@@ -7,6 +7,8 @@
  * per chunk.
  */
 
+import { createHash } from "node:crypto";
+
 const ALPHA = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 /** Bit-position permutation used when encode flag=1 (login path). */
@@ -86,6 +88,29 @@ export function decodePassword(wire: string, key: number): string | null {
   const text = raw.toString("ascii");
   if (!text || ![...text].every((c) => c >= " " && c <= "~")) return null;
   return text;
+}
+
+const md5 = (s: string) => createHash("md5").update(s, "latin1").digest("hex");
+
+/** True when a decoded wire password is md5 hex; only the Soul Saver client sends that. */
+export function isMd5Hex(s: string): boolean {
+  return /^[0-9a-f]{32}$/i.test(s);
+}
+
+/**
+ * Does the client-encoded wire password match the DB password?
+ * Ghost Online encodes the plaintext; Soul Saver encodes md5(plaintext) as lowercase hex.
+ * DB rows may hold plaintext, the raw wire string, or (auto-created by Soul Saver) the md5.
+ */
+export function passwordMatches(dbPass: string, wirePass: string, key: number | null): boolean {
+  const plain = key != null ? decodePassword(wirePass, key) : null;
+  return (
+    (key != null && encodePassword(dbPass, key) === wirePass) ||
+    dbPass === wirePass ||
+    (plain != null && dbPass.toLowerCase() === plain.toLowerCase()) ||
+    (plain != null && isMd5Hex(plain) && md5(dbPass) === plain.toLowerCase()) ||
+    (plain != null && isMd5Hex(dbPass) && md5(plain) === dbPass.toLowerCase())
+  );
 }
 
 /** Read encode key from login frame (u16 LE right after password bytes). */
