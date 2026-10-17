@@ -125,6 +125,7 @@ import { loadPhantoms, phantomMuls, unsealItem } from "./phantom.js";
 import { ssAttr, ssMaxLevel, ssSkill, ssSkillClients, ssSkillCost, ssSkillHeal, ssSyncJobSkills } from "./ssskills.js";
 import { beltAbsorb, beltCheckWorn, beltDecay, beltExpMul, beltPacket, beltReset } from "./belt.js";
 import { expireSsBuffs, isSsBuffItem, loadSsBuffs, ssRecover, ssUse, ssUseVisual, startSsBuff } from "./ssuse.js";
+import { ssPortal } from "./ssportal.js";
 import { recomputeSsStats, refreshSsWeapon, isSsChar, ssExpForLevel, SS_STAT_POINTS_PER_LEVEL, SS_SKILL_POINTS_PER_LEVEL } from "./ssstats.js";
 import { buildQuickSlotAll, saveQuickSlot } from "./hotkeys.js";
 import {
@@ -1714,6 +1715,23 @@ async function useSsSpend(p: Player, itemId: number, slot: number): Promise<void
   const rec = ssRecover(itemId, p.maxHp, p.maxMp);
   const buff = isSsBuffItem(itemId);
   const visual = ssUseVisual(itemId);
+  const portal = ssPortal(itemId, p.map, deadTownMap(p.map));
+  if (portal && !("unknown" in portal)) {
+    // Teleport items (use type 14, ssportal.ts); the item is only spent when the warp happens.
+    if (!p.alive || !mapExists(portal.map, portal.region)) {
+      console.log(`[spend] ss portal refused char=${p.charId} item=${itemId} -> ${portal.map}/${portal.region} alive=${p.alive}`);
+      send(p, notice("You cannot move there now.", 3));
+      return;
+    }
+    if (portal.consume) {
+      if (!(await removeInvQty(p.charId, 3, slot, 1))) return;
+      for (const out of await refreshBagPackets(p.charId, 3, p.magic || 0x0037)) send(p, out);
+    }
+    const pos = sanitizePlayerPos(portal.map, portal.region, portal.x, portal.y);
+    console.log(`[spend] ss portal char=${p.charId} item=${itemId} ${p.map}/${p.region} -> ${portal.map}/${portal.region} @${pos.x},${pos.y}`);
+    await warpPlayer(p, portal.map, portal.region, pos.x, pos.y);
+    return;
+  }
   if (!rec && !buff && !visual) {
     const u = ssUse(itemId);
     console.log(`[spend] ss no effect char=${p.charId} item=${itemId} use=${u ? `${u.type},${u.value},${u.secs}` : "-"} (kept)`);
@@ -1732,6 +1750,33 @@ async function useSsSpend(p: Player, itemId: number, slot: number): Promise<void
   if (buff) for (const out of (await startSsBuff(p.charId, itemId)) ?? []) send(p, out);
   for (const out of await refreshBagPackets(p.charId, 3, p.magic || 0x0037)) send(p, out);
   console.log(`[spend] ss char=${p.charId} item=${itemId} hp=${p.hp}/${p.maxHp} mp=${p.mp}/${p.maxMp}${buff ? " buff" : ""}${visual ? " visual" : ""}`);
+}
+
+/** Move a player to another map (C 0x85 warp, teleport items): leave packet to the old map, CHANGEMAP 0x86 to self. */
+async function warpPlayer(p: Player, map: number, region: number, x: number, y: number): Promise<void> {
+  broadcastMap(p.map, p.region, leavePacket(p.charId), p.charId);
+  const leftMap = p.map;
+  const leftRegion = p.region;
+  const shopEnd = endPShopIfActive(p.charId);
+  if (shopEnd) broadcastMap(leftMap, leftRegion, shopEnd);
+  clearMonCombat(p);
+  if (p.fishing) {
+    p.fishing = false;
+    if (p.fishTimer) clearTimeout(p.fishTimer);
+    broadcastMap(leftMap, leftRegion, fishAck(p.charId, 0, 0));
+  }
+  p.map = map;
+  p.region = region;
+  p.x = x;
+  p.y = y;
+  p.fieldEntered = false;
+  maybeHibernateMap(leftMap, leftRegion, p.charId);
+  p.touchGraceUntil = Date.now() + rates.touchGraceRespawnMs;
+  p.lastTouchAt = Date.now();
+  await execute("UPDATE characters SET map=?, region=?, charX=?, charY=? WHERE ID=?", [map, region, x, y, p.charId]);
+  send(p, writeChangeMapPacket(p, map, region, x, y));
+  p.pendingWarp = true;
+  console.log(`[field] warp char=${p.charId} -> ${map}/${region} @${x},${y}`);
 }
 
 /** Gift/Treasure/Christmas boxes + Lucky Spring / Golden Xmas sox. Returns true if handled. */
@@ -3242,29 +3287,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       x = pos.x;
       y = pos.y;
     }
-    broadcastMap(p.map, p.region, leavePacket(p.charId), p.charId);
-    const leftMap = p.map;
-    const leftRegion = p.region;
-    const shopEnd = endPShopIfActive(p.charId);
-    if (shopEnd) broadcastMap(leftMap, leftRegion, shopEnd);
-    clearMonCombat(p);
-    if (p.fishing) {
-      p.fishing = false;
-      if (p.fishTimer) clearTimeout(p.fishTimer);
-      broadcastMap(leftMap, leftRegion, fishAck(p.charId, 0, 0));
-    }
-    p.map = map;
-    p.region = region;
-    p.x = x;
-    p.y = y;
-    p.fieldEntered = false;
-    maybeHibernateMap(leftMap, leftRegion, p.charId);
-    p.touchGraceUntil = Date.now() + rates.touchGraceRespawnMs;
-    p.lastTouchAt = Date.now();
-    await execute("UPDATE characters SET map=?, region=?, charX=?, charY=? WHERE ID=?", [map, region, x, y, p.charId]);
-    send(p, writeChangeMapPacket(p, map, region, x, y));
-    p.pendingWarp = true;
-    console.log(`[field] warp char=${p.charId} -> ${map}/${region} @${x},${y}`);
+    await warpPlayer(p, map, region, x, y);
     return;
   }
 
