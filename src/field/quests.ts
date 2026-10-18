@@ -297,13 +297,16 @@ async function jobChange(cid: number, job: number): Promise<Buffer[]> {
   return [await buildSkillAll(cid)];
 }
 
-async function applySsRewards(cid: number, q: SsQuest): Promise<Buffer[]> {
+async function applySsRewards(cid: number, q: SsQuest, chosen = 0): Promise<Buffer[]> {
   const out: Buffer[] = [];
+  // Reward choice: C 0x7C u32 @16 = the picked item (official quests 1113/1341/1171 gave only that one).
+  const pick = (q.items ?? []).filter(([iid]) => iid === chosen);
+  const items = pick.length ? pick : (q.items ?? []);
   for (const [iid, n] of q.remove ?? []) out.push(...(await removeItemById(cid, iid, n)));
   if (q.money) await addMoney(cid, q.money);
   if (q.exp) await addExp(cid, q.exp);
   if (q.fame) await addFame(cid, q.fame);
-  for (const [iid, n] of q.items ?? []) {
+  for (const [iid, n] of items) {
     const bag = await addItemToInventory(cid, iid, n);
     if (bag >= 0) out.push(...(await refreshBagPackets(cid, bag)));
   }
@@ -314,8 +317,8 @@ async function applySsRewards(cid: number, q: SsQuest): Promise<Buffer[]> {
   return out;
 }
 
-async function applyRewards(cid: number, questId: number, ss = false): Promise<Buffer[]> {
-  if (!useLegacy(questId, ss)) return applySsRewards(cid, SS_QUESTS[questId]!);
+async function applyRewards(cid: number, questId: number, ss = false, chosen = 0): Promise<Buffer[]> {
+  if (!useLegacy(questId, ss)) return applySsRewards(cid, SS_QUESTS[questId]!, chosen);
   const out: Buffer[] = [];
   for (const [iid, q] of TURN_IN_ITEMS[questId] ?? []) {
     out.push(...(await removeItemById(cid, iid, q)));
@@ -399,13 +402,13 @@ const SS_JOB_CHANGE = new Set([16, 19, 21, 351, 612, 2018]);
 /** lv60 "2nd Job Change(3)" quests ’ job tier 3. */
 const SS_JOB2_CHANGE = new Set([169, 172, 175, 178, 181, 184, 385, 388, 635, 638, 2092, 2095]);
 
-export async function completeQuest(cid: number, questId: number, ss = false): Promise<QuestCompleteResult> {
+export async function completeQuest(cid: number, questId: number, ss = false, chosen = 0): Promise<QuestCompleteResult> {
   const row = await getRow(cid, questId);
   if (!row || Number(row.questState) !== 0x31 || !supported(questId)) {
     return { packets: [await buildQuestAll(cid, ss)], refreshChar: false };
   }
   await execute("UPDATE quests SET state=50 WHERE charid=? AND questid=?", [cid, questId]);
-  const rewardPkts = await applyRewards(cid, questId, ss);
+  const rewardPkts = await applyRewards(cid, questId, ss, chosen);
   if (ss && SS_JOB_CHANGE.has(questId)) await setSsClass(cid, 1);
   if (ss && SS_JOB2_CHANGE.has(questId)) await setSsClass(cid, 3);
   // lv40 "Selecting Faction": 60 Justice (JusticeFactionReferral), 64 Chaos (ChaosFactionReferral).
@@ -451,7 +454,7 @@ export async function handleQuestPacket(
   const qid = pkt.length >= 14 ? pkt.readUInt16LE(12) : 0;
   if (opcode === 0x007a) return { packets: await acceptQuest(cid, level, qid, ss), refreshChar: false };
   if (opcode === 0x007b) return { packets: await giveUpQuest(cid, qid, ss), refreshChar: false };
-  if (opcode === 0x007c) return completeQuest(cid, qid, ss);
+  if (opcode === 0x007c) return completeQuest(cid, qid, ss, pkt.length >= 20 ? pkt.readUInt32LE(16) : 0);
   if (opcode === 0x007e) {
     const questId = pkt.length >= 22 ? pkt.readUInt16LE(20) : qid;
     return completeQuest(cid, questId, ss);
