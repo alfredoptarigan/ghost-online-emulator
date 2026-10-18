@@ -7,6 +7,7 @@
 import { config } from "../config.js";
 import { getTrade } from "./trade.js";
 import { ssJobBytes } from "./ssjob.js";
+import { avatarLevel, avatarSkills } from "./ssavatar.js";
 
 /** Base body item (client builds its own preview ENTERPLAYER with this at +0x84). */
 export const SS_DEFAULT_BODY = 9000006;
@@ -289,8 +290,8 @@ function ssSetAvatar(g: Buffer): Buffer {
 export const ssCharJob = new Map<number, number>();
 
 /**
- * Soul Saver-only SKILL_ALL sections (official capture, new Magic User): avatar skills 101/102/104 as u32 @0x160
- * (levels @0x180) and 105 @0x194 (levels @0x1bc); the 6 basic-attack combo skills @0x218 (levels @0x240) 
+ * Soul Saver-only SKILL_ALL sections (official capture, new Magic User): avatar skills 101/102/104 (+107) as u32 @0x160
+ * (levels @0x188) and 105 (+103) @0x194 (levels @0x1bc); the 6 basic-attack combo skills @0x218 (levels @0x240) 
  * Magic User 3012..3017 (attack effects 1620 + 1622..1627). Without them the basic attack (UDP 0x2B) found no
  * target and never sent a hit 0x45. Combo skills of the other classes are not captured yet.
  */
@@ -298,12 +299,16 @@ const SS_COMBO_SKILLS: Record<number, number[]> = { 3: [3012, 3013, 3014, 3015, 
 
 function ssSkillAll(g: Buffer, charId: number): Buffer {
   const s = Buffer.alloc(708, 0);
-  [101, 102, 104].forEach((id, i) => {
+  // Avatar skills grow with the avatar level (ssavatar.ts); official levels sit @0x188 / @0x1bc.
+  const av = avatarSkills(avatarLevel(charId));
+  av.a.forEach(([id, lv], i) => {
     s.writeUInt32LE(id, 0x160 + 4 * i);
-    s.writeUInt8(1, 0x180 + i);
+    s.writeUInt8(lv, 0x188 + i);
   });
-  s.writeUInt32LE(105, 0x194);
-  s.writeUInt8(1, 0x1bc);
+  av.b.forEach(([id, lv], i) => {
+    s.writeUInt32LE(id, 0x194 + 4 * i);
+    s.writeUInt8(lv, 0x1bc + i);
+  });
   (SS_COMBO_SKILLS[ssCharJob.get(charId) ?? -1] ?? []).forEach((id, i) => {
     s.writeUInt32LE(id, 0x218 + 4 * i);
     s.writeUInt8(1, 0x240 + i);

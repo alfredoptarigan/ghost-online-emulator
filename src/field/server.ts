@@ -131,6 +131,20 @@ import { ssPortal } from "./ssportal.js";
 import { recomputeSsStats, refreshSsWeapon, isSsChar, ssExpForLevel, SS_STAT_POINTS_PER_LEVEL, SS_SKILL_POINTS_PER_LEVEL } from "./ssstats.js";
 import { buildQuickSlotAll, saveQuickSlot } from "./hotkeys.js";
 import {
+  avatarActive,
+  avatarCancelTailPacket,
+  avatarInfoPacket,
+  avatarLeave,
+  avatarPower,
+  avatarQuickSlotPacket,
+  avatarSkillsPacket,
+  avatarStatePacket,
+  avatarTailPackets,
+  gainAvatarExp,
+  loadAvatar,
+  setAvatarState,
+} from "./ssavatar.js";
+import {
   dispatchPShop,
   handlePShopBuy,
   isPShopOpcode,
@@ -2682,6 +2696,96 @@ async function ssBeltSpirit(p: Player): Promise<void> {
   if (n !== null) send(p, beltPacket(n));
 }
 
+/** Auto-cancel timers for the avatar transform (power runs out). */
+const avatarTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+function clearAvatarTimer(charId: number): void {
+  const t = avatarTimers.get(charId);
+  if (t) clearTimeout(t);
+  avatarTimers.delete(charId);
+}
+
+/** CHAR_ALL + the packets the official server always sends with it (0x263, 0x739, 0x3D6, 0x73F). */
+async function sendSsStatBundle(p: Player): Promise<void> {
+  await applySsStats(p);
+  await refreshSsWeapon(p.charId);
+  send(p, await charAll(p.charId));
+  send(p, avatarInfoPacket(p.charId));
+  for (const out of avatarTailPackets()) send(p, out);
+}
+
+/** C 0x260: 1 = start the cast (S 0x261 state 1), 2 = cast done (transform), 0 = cancel. */
+async function handleAvatar(p: Player, step: number): Promise<void> {
+  await loadAvatar(p.charId);
+  const active = avatarActive(p.charId);
+  if (step === 1) {
+    if (active) return;
+    if (avatarPower(p.charId) <= 0) {
+      send(p, notice("Your Avatar does not have enough Duration.", 3));
+      send(p, avatarStatePacket(p.charId, 0));
+      console.log(`[field] avatar char=${p.charId} cast refused: no power`);
+      return;
+    }
+    await setAvatarState(p.charId, 1);
+    broadcastMap(p.map, p.region, avatarStatePacket(p.charId, 1));
+    console.log(`[field] avatar char=${p.charId} cast start`);
+    return;
+  }
+  if (step === 2) {
+    if (active) return;
+    const power = avatarPower(p.charId);
+    if (power <= 0) {
+      await setAvatarState(p.charId, 0);
+      broadcastMap(p.map, p.region, avatarStatePacket(p.charId, 0));
+      return;
+    }
+    await setAvatarState(p.charId, 2);
+    await sendSsStatBundle(p);
+    broadcastMap(p.map, p.region, avatarStatePacket(p.charId, 2));
+    send(p, avatarQuickSlotPacket());
+    send(p, avatarSkillsPacket(p.charId));
+    sendVital(p);
+    clearAvatarTimer(p.charId);
+    avatarTimers.set(
+      p.charId,
+      setTimeout(() => {
+        avatarTimers.delete(p.charId);
+        if (!players.has(p.charId) || !avatarActive(p.charId)) return;
+        p.pktChain = p.pktChain.then(() => handleAvatar(p, 0)).catch((e) => console.error("[field] avatar timeout", e));
+      }, power * 1000 + 500),
+    );
+    console.log(`[field] avatar char=${p.charId} transformed power=${power} hp=${p.maxHp} mp=${p.maxMp} atk=${p.maxAtk}/${p.maxMag} def=${p.def}`);
+    return;
+  }
+  // cancel (also an interrupted cast)
+  clearAvatarTimer(p.charId);
+  const prev = await setAvatarState(p.charId, 0);
+  if (prev !== 2) {
+    broadcastMap(p.map, p.region, avatarStatePacket(p.charId, 0));
+    if (prev === 1) console.log(`[field] avatar char=${p.charId} cast cancelled`);
+    return;
+  }
+  await sendSsStatBundle(p);
+  broadcastMap(p.map, p.region, avatarStatePacket(p.charId, 0));
+  send(p, await buildQuickSlotAll(p.charId));
+  send(p, await buildSkillAll(p.charId));
+  send(p, avatarCancelTailPacket());
+  sendVital(p);
+  console.log(`[field] avatar char=${p.charId} cancel power=${avatarPower(p.charId)} hp=${p.maxHp} mp=${p.maxMp} atk=${p.maxAtk}/${p.maxMag} def=${p.def}`);
+}
+
+/** A spirit picked up while transformed gives avatar EXP (S 0x26A); a level up resends the stats and 0x262. */
+async function ssAvatarSpirit(p: Player): Promise<void> {
+  if (!p.soulSaver || !avatarActive(p.charId)) return;
+  const r = await gainAvatarExp(p.charId, p.level);
+  for (const out of r.packets) send(p, out);
+  if (!r.leveled) return;
+  await sendSsStatBundle(p);
+  send(p, avatarSkillsPacket(p.charId));
+  sendVital(p);
+  console.log(`[field] avatar char=${p.charId} level up -> ${avatarInfoPacket(p.charId).readUInt16LE(0x16)}`);
+}
+
 /** Soul Saver characters: recompute HP/MP/attack/def from the client job tables and refresh the live player. */
 async function applySsStats(p: Player): Promise<boolean> {
   const st = await recomputeSsStats(p.charId);
@@ -2759,6 +2863,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
           /* */
         }
       }
+      if (p.soulSaver) await loadAvatar(info.charId); // avatar level/power (half the avatar stats count in normal mode)
       await recomputeSsStats(info.charId); // Soul Saver characters: stats from the client job tables
       if (p.soulSaver) await refreshSsWeapon(info.charId); // CHAR_ALL weapon speed/range (fan basic attack)
       await loadPhantoms(info.charId); // running Phantom bonuses; expired timed items are removed
@@ -2884,6 +2989,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     // Send loadout (legacy: CHAR_ALL → skills → quickslot → quests → MAP_INFO).
     // en-client: keep MAP_INFO early (before quests) — MAP last left some clients stuck loading.
     send(p, await charAll(p.charId));
+    if (p.soulSaver) send(p, avatarInfoPacket(p.charId)); // official login: 0x263 avatar level/EXP/power
     send(p, await buildSkillAll(p.charId));
     beltReset(p.charId);
     send(p, mapInfo(p));
@@ -2938,6 +3044,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     // Soul Saver caches its player object (0x3c0e14c) only while parsing CHAR_ALL; before the map
     // load that object does not exist yet and the client stays on "Loading the field data".
     if (p.soulSaver) send(p, await charAll(p.charId));
+    if (p.soulSaver) send(p, avatarInfoPacket(p.charId));
     if (p.soulSaver) send(p, moneyPacket(p.money, 0)); // otherwise the bag shows 0 gold
     // en-client often stays invisible without an explicit SETAVATAR after ENTERPLAYER
     if (p.magic === 0x0037) send(p, await buildSetAvatar(p.charId));
@@ -2998,6 +3105,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       });
       send(p, ep);
       if (p.soulSaver) send(p, await charAll(p.charId));
+      if (p.soulSaver) send(p, avatarInfoPacket(p.charId));
       if (p.magic === 0x0037) send(p, await buildSetAvatar(p.charId));
       for (const o of players.values()) {
         if (o.loggedIn && o.fieldEntered && o.charId !== p.charId && o.map === p.map && o.region === p.region) {
@@ -3248,6 +3356,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
         broadcastMap(p.map, p.region, buildDropClear(p.charId, d));
         send(p, await buildEquip(p.charId));
         await ssBeltSpirit(p);
+        await ssAvatarSpirit(p);
         return;
       }
 
@@ -3274,6 +3383,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       }
       sendVital(p);
       await ssBeltSpirit(p);
+      await ssAvatarSpirit(p);
       return;
     }
     const bag = isPetItem(d.itemId)
@@ -3556,6 +3666,12 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     return;
   }
 
+  // Soul Saver avatar transform (Shift): C 0x260 byte @12 = 1 start cast, 2 cast done, 0 cancel (ssavatar.ts).
+  if (op === 0x0260 && p.soulSaver) {
+    await handleAvatar(p, pkt.length > 12 ? pkt.readUInt8(12) : 0);
+    return;
+  }
+
   // Soul Saver C 0x137 = cancel the seal of a sealed item (u32 bag @12, u32 slot @16); official reply = bag packet.
   if (op === 0x0137 && p.soulSaver) {
     const bag = pkt.length >= 16 ? pkt.readUInt32LE(12) : -1;
@@ -3758,6 +3874,8 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
 
   // hotkeys
   if (op === 0x00a8) {
+    // The avatar hotkey bar is a separate, empty bar (official 0xA9 all -1); do not overwrite the normal one.
+    if (p.soulSaver && avatarActive(p.charId)) return;
     try {
       await saveQuickSlot(p.charId, pkt);
       send(p, await buildQuickSlotAll(p.charId));
@@ -4084,6 +4202,8 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
 
     sock.on("close", () => {
       beltReset(p.charId);
+      clearAvatarTimer(p.charId);
+      if (p.soulSaver && p.charId) void avatarLeave(p.charId).catch((e) => console.error("[field] avatar save", e));
       if (p.loggedIn && p.charId) {
         const leftMap = p.map;
         const leftRegion = p.region;

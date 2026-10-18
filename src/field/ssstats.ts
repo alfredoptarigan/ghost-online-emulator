@@ -26,6 +26,7 @@ import { query, execute } from "../db.js";
 import { config } from "../config.js";
 import { ssWeaponAttack } from "./soulsaver.js";
 import { ssAttr, ssMaxLevel, ssSkill } from "./ssskills.js";
+import { avatarActive, avatarMods } from "./ssavatar.js";
 
 export const SS_STAT_POINTS_PER_LEVEL = 4;
 export const SS_SKILL_POINTS_PER_LEVEL = 2;
@@ -135,6 +136,7 @@ export function ssDerive(
   growth: Array<[cls: number, fromLevel: number]> = [],
   faction = 0,
   mastery: { patk: number; matk: number } = { patk: 100, matk: 100 },
+  avatar: { a: number[]; active: boolean } = { a: [3, 3, 0, 0, 0], active: false },
 ): SsStats {
   const jt = (jobs ??= load<JobsTable>("ss_jobs.json", (j) => j, { base: [], growth: [] }));
   const it0 = (items ??= load<ItemsTable>("ss_items.json", (j) => j.items ?? {}, {}));
@@ -163,6 +165,8 @@ export function ssDerive(
   for (const [slot, id] of worn) {
     const f = it0[id]?.f;
     if (!f) continue;
+    // Avatar mode (official): only the main weapon counts; rings, belt, necklace, armor ... add nothing.
+    if (avatar.active && !(slot === 0 && it0[id]!.s === 1)) continue;
     const v = (i: number) => f[i] ?? 0;
     switch (it0[id]!.s) {
       case 1: // weapon; slot 17 (avatar amulet) adds nothing outside avatar mode
@@ -208,15 +212,39 @@ export function ssDerive(
   const dMin = Math.floor(dex * c(b?.nStateDexMin));
   const pm = (x: number) => Math.floor(((x + wPhy) * (mastery.patk || 100)) / 100);
   const mm = (x: number) => Math.floor(((x + wMag) * (mastery.matk || 100)) / 100);
+  const hpBase = Math.floor(con * c(b?.nStateConHP) + str * c(b?.nStateStrHP)) + Math.floor(gHp / 100);
+  const mpBase = Math.floor(int * c(b?.nStateIntSP)) + Math.floor(gMp / 100);
+  const defBase = Math.floor(con * c(b?.nStateConDef));
+  const av = avatar.a;
+  if (avatar.active) {
+    // Official avatar CHAR_ALL (lv14-22, avatar L1-12): HP/MP/def = base + avatar stat (no equipment), attack base =
+    // the better of phys/magic without equipment + the weapon (no mastery); magic = base + 10, phys = base + avatar
+    // phys stat. After C 0x267 (avatar skill set) the official attack is ~9-15 % higher still (not implemented).
+    const pMax = sAtt + dMax + wPhy;
+    const mMax = iAtt + dMax + wMag;
+    const useMag = mMax >= pMax;
+    const baseMax = useMag ? mMax : pMax;
+    const baseMin = useMag ? iAtt + dMin + wMag : sAtt + dMin + wPhy;
+    return {
+      maxHp: hpBase + av[0]!,
+      maxMp: mpBase + av[1]!,
+      phyMax: baseMax + av[2]!,
+      phyMin: baseMin + av[2]!,
+      magMax: baseMax + 10,
+      magMin: baseMin + 10,
+      def: defBase + av[4]!,
+    };
+  }
   return {
-    maxHp: 1 + Math.floor(con * c(b?.nStateConHP) + str * c(b?.nStateStrHP)) + Math.floor(gHp / 100) + hpAdd,
-    maxMp: 1 + Math.floor(int * c(b?.nStateIntSP)) + Math.floor(gMp / 100) + mpAdd,
+    // Outside avatar mode half of the avatar HP/MP/def stats count (avatar L1: +1 HP, +1 MP).
+    maxHp: hpBase + Math.floor(av[0]! / 2) + hpAdd,
+    maxMp: mpBase + Math.floor(av[1]! / 2) + mpAdd,
     phyMax: pm(sAtt + dMax + phyAdd),
     phyMin: pm(sAtt + dMin + phyAdd),
     // Official: DEX raises magic the same way as physical attack (+3/+1 at DEX 3 -> 4).
     magMax: mm(iAtt + dMax + magAdd),
     magMin: mm(iAtt + dMin + magAdd),
-    def: Math.floor(con * c(b?.nStateConDef)) + defAdd,
+    def: defBase + Math.floor(av[4]! / 2) + defAdd,
   };
 }
 
@@ -225,6 +253,8 @@ export async function refreshSsWeapon(charId: number): Promise<void> {
   const it0 = (items ??= load<ItemsTable>("ss_items.json", (j) => j.items ?? {}, {}));
   const worn = await query<RowDataPacket[]>("SELECT type FROM equip WHERE charid=? AND pos1=0 AND pos2=0", [charId]);
   const w = worn.map((r) => it0[Number(r.type)]).find((it) => it?.s === 1 && it.f);
+  // Official avatar mode: CHAR_ALL +0x9c/+0x9d = 1/0.
+  if (avatarActive(charId)) return void ssWeaponAttack.set(charId, { speed: 1, range: 0 });
   ssWeaponAttack.set(charId, { speed: w?.f?.[8] || 1, range: w?.f?.[7] || 1 });
 }
 
@@ -294,6 +324,7 @@ export async function recomputeSsStats(charId: number): Promise<SsStats | null> 
     growth,
     faction,
     await masteryOf(charId, wornIds),
+    avatarMods(charId),
   );
   const pas = await passiveBonus(charId);
   s.maxHp += pas.hp;
