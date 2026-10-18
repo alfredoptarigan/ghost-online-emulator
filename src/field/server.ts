@@ -151,6 +151,23 @@ import {
   loadAvatar,
   setAvatarState,
 } from "./ssavatar.js";
+import { WOT_REWARD_ITEM, sysMsgItemPacket, wotCheck, wotDue, wotExpired, wotNoteKill, wotStart } from "./ssantimacro.js";
+import {
+  autoHuntMapPacket,
+  autoHuntOf,
+  autoHuntStatePacket,
+  autoHunters,
+  BUCKET_CHARGE,
+  chargeBucket,
+  chargeResultPacket,
+  isAutoHunting,
+  leaveAutoHunt,
+  loadAutoHunt,
+  saveAutoHunt,
+  setAutoCharge,
+  setAutoHunt,
+  setAutoHuntSkill,
+} from "./ssautohunt.js";
 import {
   dispatchPShop,
   handlePShopBuy,
@@ -1944,6 +1961,7 @@ function levelUpPacket(charId: number, level = 0): Buffer {
  */
 async function grantMonsterExp(p: Player, amount: number): Promise<boolean> {
   if (amount <= 0 || !p.loggedIn) return false;
+  if (p.soulSaver && !isAutoHunting(p.charId)) wotNoteKill(p.charId);
   const startLevel = p.level;
   const buff = activeBuffOrNull(p.eventBuff);
   const mul = (buff?.expMul ?? 1) * phantomMuls(p.charId).expMul;
@@ -2396,6 +2414,9 @@ async function runGmCommand(p: Player, cmdRaw: string): Promise<void> {
     } else {
       for (const out of await refreshBagPackets(p.charId, bag, p.magic || 0x0037)) send(p, out);
     }
+  } else if (c0 === "//wot") {
+    // Soul Saver: open the anti-macro Window of Truth now.
+    if (p.soulSaver) send(p, wotStart(p.charId));
   } else if (c0 === "//ban") {
     const targetName = parts[1];
     if (!targetName) return;
@@ -2736,7 +2757,83 @@ async function sendSsStatBundle(p: Player): Promise<void> {
   await refreshSsWeapon(p.charId);
   send(p, await charAll(p.charId));
   send(p, avatarInfoPacket(p.charId));
-  for (const out of avatarTailPackets()) send(p, out);
+  const autoHunt = await loadAutoHunt(p.charId);
+  for (const out of avatarTailPackets()) send(p, out.readUInt16LE(2) === 0x073f ? autoHuntStatePacket(autoHunt) : out);
+}
+
+/** Soul Saver "Window of Truth" failed (wrong answer or no answer): moved to the village of the area. */
+async function wotFail(p: Player, why: string): Promise<void> {
+  if (!players.has(p.charId) || !p.alive || !p.fieldEntered || p.pendingWarp) return;
+  const town = ssPortal(8849003, p.map, deadTownMap(p.map));
+  console.log(`[field] window of truth failed (${why}) char=${p.charId}`);
+  if (!town || "unknown" in town || !mapExists(town.map, town.region)) return;
+  await warpPlayer(p, town.map, town.region, town.x, town.y);
+}
+
+/** C 0x73E: Window of Truth answer (official success: S 0x7D0 111071 with the RewardPlaque, then S 0xEA u32 1). */
+async function handleWotAnswer(p: Player, answer: number): Promise<void> {
+  const r = wotCheck(p.charId, answer);
+  if (!r) return;
+  if (!r.ok) {
+    await wotFail(p, `wrong answer ${answer} code=${r.code}`);
+    return;
+  }
+  // Official puts the plaque in a reward list the client fetches after S 0xEA (C 0x1CB / S 0x1CC, not emulated);
+  // here it goes straight into the bag.
+  const bag = await addItemToInventory(p.charId, WOT_REWARD_ITEM, 1, 0, -1, p.magic || 0x0037);
+  if (bag >= 0) for (const out of await refreshBagPackets(p.charId, bag, p.magic || 0x0037)) send(p, out);
+  send(p, sysMsgItemPacket(111071, WOT_REWARD_ITEM));
+  console.log(`[field] window of truth passed char=${p.charId} code=${r.code} bag=${bag}`);
+}
+
+/** Soul Saver Auto Hunt tray: C 0x740 charge, 0x742 auto charge, 0x744 start/stop, 0x746 skill slot. */
+async function handleAutoHunt(p: Player, op: number, pkt: Buffer): Promise<void> {
+  const h = await loadAutoHunt(p.charId);
+  if (op === 0x0744) {
+    const on = pkt.length > 12 && pkt.readUInt8(12) === 1;
+    const self = setAutoHunt(h, on);
+    broadcastMap(p.map, p.region, autoHuntMapPacket(p.charId, on));
+    send(p, self);
+    console.log(`[field] auto hunt char=${p.charId} ${on ? "on" : "off"} bucket=${h.bucket} fatigue=${h.fatigue}`);
+    return;
+  }
+  if (op === 0x0746) {
+    const out = setAutoHuntSkill(h, pkt);
+    if (out) send(p, out);
+  } else if (op === 0x0742) {
+    send(p, setAutoCharge(h, pkt.length >= 16 && pkt.readUInt32LE(12) === 1));
+  } else {
+    const ok = p.money >= BUCKET_CHARGE && chargeBucket(h);
+    if (ok) {
+      p.money -= BUCKET_CHARGE;
+      await execute("UPDATE characters SET money=? WHERE ID=?", [p.money, p.charId]);
+      send(p, moneyPacket(p.money, -BUCKET_CHARGE));
+      send(p, autoHuntStatePacket(h));
+    }
+    send(p, chargeResultPacket(ok));
+  }
+  await saveAutoHunt(p.charId);
+}
+
+/** Auto Hunt: refill HP / MP under the gauge % from the bucket (1 gold per point), auto charge when empty. */
+async function autoHuntRefill(p: Player): Promise<void> {
+  const h = autoHuntOf(p.charId);
+  if (!h?.on || !p.alive || !p.loggedIn) return;
+  const needHp = p.hp * 100 < p.maxHp * h.gauge ? p.maxHp - p.hp : 0;
+  const needMp = p.mp * 100 < p.maxMp * h.gauge ? p.maxMp - p.mp : 0;
+  const cost = needHp + needMp;
+  if (cost <= 0) return;
+  if (h.bucket < cost && h.autoCharge && p.money >= BUCKET_CHARGE && chargeBucket(h)) {
+    p.money -= BUCKET_CHARGE;
+    await execute("UPDATE characters SET money=? WHERE ID=?", [p.money, p.charId]);
+    send(p, moneyPacket(p.money, -BUCKET_CHARGE));
+  }
+  if (h.bucket < cost) return;
+  h.bucket -= cost;
+  p.hp += needHp;
+  p.mp += needMp;
+  sendVital(p);
+  send(p, autoHuntStatePacket(h));
 }
 
 /** C 0x260: 1 = start the cast (S 0x261 state 1), 2 = cast done (transform), 0 = cancel. */
@@ -3705,6 +3802,18 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     return;
   }
 
+  // Soul Saver anti-macro "Window of Truth" answer: C 0x73E u32 @12 (ssantimacro.ts).
+  if (op === 0x073e && p.soulSaver) {
+    await handleWotAnswer(p, pkt.length >= 16 ? pkt.readInt32LE(12) : 0);
+    return;
+  }
+
+  // Soul Saver Auto Hunt tray (ssautohunt.ts).
+  if ((op === 0x0740 || op === 0x0742 || op === 0x0744 || op === 0x0746) && p.soulSaver) {
+    await handleAutoHunt(p, op, pkt);
+    return;
+  }
+
   // Soul Saver avatar transform (Shift): C 0x260 byte @12 = 1 start cast, 2 cast done, 0 cancel (ssavatar.ts).
   if (op === 0x0260 && p.soulSaver) {
     await handleAvatar(p, pkt.length > 12 ? pkt.readUInt8(12) : 0);
@@ -4057,6 +4166,34 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
     }
   }, 300_000);
 
+  // Soul Saver anti-macro Window of Truth: every 20-25 min of hunting (not while Auto Hunt is on; official
+  // capture had no popup during 35 min of Auto Hunt). SS_ANTIMACRO=0 turns it off.
+  setInterval(() => {
+    const run = (pl: Player, fn: () => Promise<void>): void => {
+      pl.pktChain = pl.pktChain.then(fn).catch((e) => console.error("[field] window of truth", e));
+    };
+    for (const id of wotExpired()) {
+      const pl = players.get(id);
+      if (pl) run(pl, () => wotFail(pl, "no answer"));
+    }
+    if (process.env.SS_ANTIMACRO === "0") return;
+    const ready = [...players.values()].filter(
+      (pl) => pl.soulSaver && pl.loggedIn && pl.fieldEntered && pl.alive && !pl.pendingWarp && !isAutoHunting(pl.charId),
+    );
+    for (const id of wotDue(ready.map((pl) => pl.charId))) {
+      const pl = players.get(id);
+      if (pl) send(pl, wotStart(id));
+    }
+  }, 10_000);
+
+  // Soul Saver Auto Hunt: HP/MP refill from the Auto Bucket.
+  setInterval(() => {
+    for (const id of autoHunters()) {
+      const pl = players.get(id);
+      if (pl?.soulSaver) pl.pktChain = pl.pktChain.then(() => autoHuntRefill(pl)).catch((e) => console.error("[field] auto hunt", e));
+    }
+  }, 2_000);
+
   // Soul Saver belt: 1 point per minute.
   setInterval(() => {
     for (const { charId, points } of beltDecay()) {
@@ -4266,6 +4403,7 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
     sock.on("close", () => {
       beltReset(p.charId);
       clearAvatarTimer(p.charId);
+      if (p.soulSaver && p.charId) void leaveAutoHunt(p.charId).catch((e) => console.error("[field] auto hunt save", e));
       if (p.soulSaver && p.charId) void avatarLeave(p.charId).catch((e) => console.error("[field] avatar save", e));
       if (p.loggedIn && p.charId) {
         const leftMap = p.map;
