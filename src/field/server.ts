@@ -134,6 +134,12 @@ import {
   avatarActive,
   avatarCancelTailPacket,
   avatarInfoPacket,
+  avatarJarEquipPacket,
+  avatarJarsPacket,
+  equipJar,
+  grantStartJars,
+  isAvatarJar,
+  registerJar,
   avatarLeave,
   avatarPower,
   avatarQuickSlotPacket,
@@ -1732,6 +1738,18 @@ async function useSsSpend(p: Player, itemId: number, slot: number): Promise<void
   const buff = isSsBuffItem(itemId);
   const visual = ssUseVisual(itemId);
   const portal = ssPortal(itemId, p.map, deadTownMap(p.map));
+  if (ssUse(itemId)?.type === 25 && isAvatarJar(itemId)) {
+    // Avatar jar ("Right-click to register"): into the S 0x265 list, the item is spent.
+    if (p.level < 10 || !(await registerJar(p.charId, itemId))) {
+      send(p, notice(p.level < 10 ? "You must be level 10 to register an Avatar jar." : "This Avatar jar cannot be registered.", 3));
+      return;
+    }
+    if (!(await removeInvQty(p.charId, 3, slot, 1))) return;
+    for (const out of await refreshBagPackets(p.charId, 3, p.magic || 0x0037)) send(p, out);
+    send(p, avatarJarsPacket(p.charId, p.level));
+    console.log(`[spend] avatar jar registered char=${p.charId} item=${itemId}`);
+    return;
+  }
   if (portal && !("unknown" in portal)) {
     // Teleport items (use type 14, ssportal.ts); the item is only spent when the warp happens.
     if (!p.alive || !mapExists(portal.map, portal.region)) {
@@ -2668,6 +2686,12 @@ function isUntranslated(name: string): boolean {
 
 async function ssLevelUpRewards(p: Player, fromLevel: number, toLevel: number): Promise<void> {
   if (!p.soulSaver || toLevel <= fromLevel) return;
+  if (Math.floor(fromLevel / 10) !== Math.floor(toLevel / 10)) {
+    // Official lv10: both basic avatar jars; every 10 levels the max jar level (S 0x265 @0x0D) rises.
+    await grantStartJars(p.charId, toLevel);
+    send(p, avatarJarsPacket(p.charId, toLevel));
+    send(p, await buildSkillAll(p.charId)); // jar skill level
+  }
   if (!levelUpEvents) {
     try {
       levelUpEvents = JSON.parse(fs.readFileSync(path.join(config.dataDir, "ss_levelup.json"), "utf8")).levelUpEvent ?? [];
@@ -2990,6 +3014,10 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     // en-client: keep MAP_INFO early (before quests) — MAP last left some clients stuck loading.
     send(p, await charAll(p.charId));
     if (p.soulSaver) send(p, avatarInfoPacket(p.charId)); // official login: 0x263 avatar level/EXP/power
+    if (p.soulSaver) {
+      await grantStartJars(p.charId, p.level); // characters already past lv10 before jars existed here
+      send(p, avatarJarsPacket(p.charId, p.level)); // S 0x265 avatar jar list ("Avatar Spirit" window)
+    }
     send(p, await buildSkillAll(p.charId));
     beltReset(p.charId);
     send(p, mapInfo(p));
@@ -3671,6 +3699,22 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
   // Soul Saver avatar transform (Shift): C 0x260 byte @12 = 1 start cast, 2 cast done, 0 cancel (ssavatar.ts).
   if (op === 0x0260 && p.soulSaver) {
     await handleAvatar(p, pkt.length > 12 ? pkt.readUInt8(12) : 0);
+    return;
+  }
+
+  // Soul Saver C 0x267 = equip the avatar jar at list index byte @12 (official reply: SKILL_ALL with the jar skill,
+  // 0x2DB, the stat packets, avatar quickslot when transformed, S 0x268 to the map).
+  if (op === 0x0267 && p.soulSaver) {
+    const idx = pkt.length > 12 ? pkt.readInt8(12) : -1;
+    const item = await equipJar(p.charId, idx);
+    console.log(`[field] avatar jar equip char=${p.charId} idx=${idx} item=${item}`);
+    if (!item) return;
+    send(p, await buildSkillAll(p.charId));
+    send(p, avatarCancelTailPacket());
+    await sendSsStatBundle(p);
+    if (avatarActive(p.charId)) send(p, avatarQuickSlotPacket());
+    send(p, avatarJarsPacket(p.charId, p.level));
+    broadcastMap(p.map, p.region, avatarJarEquipPacket(p.charId, item, idx));
     return;
   }
 

@@ -7,7 +7,7 @@
 import { config } from "../config.js";
 import { getTrade } from "./trade.js";
 import { ssJobBytes } from "./ssjob.js";
-import { avatarLevel, avatarSkills } from "./ssavatar.js";
+import { avatarLevel, avatarSkills, jarSkill } from "./ssavatar.js";
 
 /** Base body item (client builds its own preview ENTERPLAYER with this at +0x84). */
 export const SS_DEFAULT_BODY = 9000006;
@@ -147,6 +147,11 @@ function ssEquip(g: Buffer, charId: number): Buffer {
     s.writeUInt8(e.slotByte & 0xff, 0x70 + e.slot);
     e.levels.forEach((v, k) => s.writeUInt8(v & 0xff, 0x89 + 10 * e.slot + k));
     s.writeUInt16LE(e.soul & 0xffff, 0x184 + 2 * e.slot);
+  }
+  // Skin (worn slot 23, official 9000006): the client rebuilds the normal look from it when the avatar transform ends
+  // (S 0x261 state 0); empty, the character turned invisible.
+  if (!s.readUInt32LE(0x0c + 4 * 23)) {
+    s.writeUInt32LE(SS_DEFAULT_BODY, 0x0c + 4 * 23);
   }
   g.copy(s, 0x5d0, 406, 425); // pet name
   s.writeUInt8(g.readUInt8(426), 0x5e4);
@@ -321,6 +326,16 @@ function ssSkillAll(g: Buffer, charId: number): Buffer {
     }
   };
   short(12, 32, 0x0c, 0x20, 10);
+  // Equipped avatar jar: its attack skill (WhiteBall 2011 / DarkBall 3011) sits in book 0 after the common skills.
+  const js = jarSkill(charId);
+  if (js) {
+    let i = 0;
+    while (i < 10 && s.readInt16LE(0x0c + 2 * i) !== 0 && s.readInt16LE(0x0c + 2 * i) !== js[0]) i++;
+    if (i < 10) {
+      s.writeInt16LE(js[0], 0x0c + 2 * i);
+      s.writeUInt8(js[1], 0x20 + i);
+    }
+  }
   short(42, 62, 0x34, 0x5c, 10);
   short(72, 92, 0x84, 0x98, 10);
   for (let i = 0; i < 20; i++) {
