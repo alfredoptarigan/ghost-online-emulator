@@ -25,7 +25,7 @@ import type { RowDataPacket } from "mysql2";
 import { query, execute } from "../db.js";
 import { config } from "../config.js";
 import { ssWeaponAttack } from "./soulsaver.js";
-import { ssAttr } from "./ssskills.js";
+import { ssAttr, ssMaxLevel, ssSkill } from "./ssskills.js";
 
 export const SS_STAT_POINTS_PER_LEVEL = 4;
 export const SS_SKILL_POINTS_PER_LEVEL = 2;
@@ -240,6 +240,26 @@ async function masteryOf(charId: number, worn: Array<[number, number]>): Promise
   return { patk: ssAttr(sid, 12, lv) || 100, matk: ssAttr(sid, 13, lv) || 100 };
 }
 
+/**
+ * Passive skills that raise stats (skill.skl, active 0): attr 4 max HP (PhysicalTraining, RaiseMaxHP), 5 max MP
+ * (ManaMastery, RaiseMaxSP), 33 defense (AdamantinePhysique, DiamondSkin). Avatar passives 100..999 (AvatarPhysique,
+ * SpiritMana, AvatarAura) are left out: they belong to the avatar transform. Weapon masteries (12/13) are masteryOf.
+ */
+async function passiveBonus(charId: number): Promise<{ hp: number; mp: number; def: number }> {
+  const rows = await query<RowDataPacket[]>("SELECT skillid, points FROM skills WHERE charid=? AND skillid>=1000", [charId]);
+  const out = { hp: 0, mp: 0, def: 0 };
+  for (const r of rows) {
+    const sid = Number(r.skillid);
+    const sk = ssSkill(sid);
+    if (!sk || sk.active !== 0) continue;
+    const lv = Math.min(ssMaxLevel(sid), Math.max(1, Number(r.points ?? 1)));
+    out.hp += ssAttr(sid, 4, lv);
+    out.mp += ssAttr(sid, 5, lv);
+    out.def += ssAttr(sid, 33, lv);
+  }
+  return out;
+}
+
 /** Recompute and store the derived stats of a Soul Saver character; null for other characters. */
 export async function recomputeSsStats(charId: number): Promise<SsStats | null> {
   if (!(await isSsChar(charId))) return null;
@@ -275,6 +295,10 @@ export async function recomputeSsStats(charId: number): Promise<SsStats | null> 
     faction,
     await masteryOf(charId, wornIds),
   );
+  const pas = await passiveBonus(charId);
+  s.maxHp += pas.hp;
+  s.maxMp += pas.mp;
+  s.def += pas.def;
   await execute(
     `UPDATE characters SET cmhp=?, cmmp=?, chp=LEAST(chp, ?), cmp=LEAST(cmp, ?),
        maxdamphy=?, mindamphy=?, maxdamw=?, mindamw=?, def=?, mexp=? WHERE ID=?`,
