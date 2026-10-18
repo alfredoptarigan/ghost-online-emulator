@@ -57,11 +57,13 @@ export async function loadDropRules(): Promise<void> {
 /**
  * Soul Saver spirits (client sprite DP_soul.csp: 9900001 blue, 2 green, 3 red, 4 purple, 5 white, 6 yellow).
  * Quest 1107 "Growing Strong (Spirits)": red restores Fury, blue/green MP, yellow fully restores Fury,
- * white HP and MP, purple goes into the worn Seal Box. One spirit per kill, as in the Ghost table.
+ * white HP and MP, purple goes into the worn Seal Box. Up to 3 per kill (official).
  */
+const SS_SPIRIT_CHANCE = 0.104;
+
 function rollSsSpirit(): { itemId: number; qty: number } {
-  // blue, green, red, purple, white, yellow — white/yellow are the rare ones.
-  const w = [24, 18, 20, 24, 8, 6];
+  // blue, green, red, purple, white, yellow: official colour counts over 1826 kills (capture day1_stage1, lv1-35).
+  const w = [108, 123, 109, 229, 3, 2];
   let r = Math.random() * w.reduce((a, b) => a + b, 0);
   let idx = 0;
   while (idx < w.length - 1 && (r -= w[idx]!) > 0) idx++;
@@ -103,6 +105,13 @@ export function rollDrops(
   const dropMul = Math.max(0, rates.dropRate * (extras?.dropMul ?? 1));
   const goldMul = Math.max(0, rates.goldRate * (extras?.goldMul ?? 1));
   let rolledSoul = false;
+  if (extras?.ssSpirits) {
+    // Official: up to 3 spirits per kill, each an independent ~10.4 % roll (1826 kills: 0 = 72 %, 1 = 24.7 %,
+    // 2 = 3.1 %, 3 = 0.2 %). They do not use the Ghost soul rows.
+    rolledSoul = true;
+    const p = Math.min(1, SS_SPIRIT_CHANCE * rates.spiritRate);
+    for (let i = 0; i < 3; i++) if (Math.random() < p) out.push(rollSsSpirit());
+  }
   for (const r of applicable) {
     if (out.length >= rates.maxDropSlots) break;
     const chance = Math.min(10000, r.chanceBps * dropMul * (r.kind === "soul" ? rates.spiritRate : 1));
