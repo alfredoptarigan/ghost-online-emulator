@@ -3542,13 +3542,16 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     const skillId = pkt.length >= 16 ? pkt.readUInt32LE(12) : 0;
     const res = await learnSkill(p.charId, skillId);
     console.log(`[field] learn-skill char=${p.charId} skill=${skillId} ${res.name} result=${res.result} cost=${res.cost}`);
-    send(p, learnResultPacket(res.result, skillId));
     if (res.result === 1) {
+      // SKILL_ALL first: on result 1 the client rebuilds the Learn list from the skill book it has at that moment.
+      send(p, await buildSkillAll(p.charId));
+      send(p, learnResultPacket(res.result, skillId));
       p.money -= res.cost;
       send(p, moneyPacket(p.money, -res.cost));
-      send(p, await buildSkillAll(p.charId));
       await applySsStats(p); // passives (PhysicalTraining ...) may change the stats
       send(p, await charAll(p.charId));
+    } else {
+      send(p, learnResultPacket(res.result, skillId));
     }
     return;
   }
