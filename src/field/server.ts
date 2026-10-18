@@ -3207,7 +3207,9 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     // York AttackMonster_Req: charId@12, slot@14, dmg@18, hitX@20, hitY@22
     ensureMonCombatReady(p);
     const slot = pkt.length >= 16 ? pkt.readUInt16LE(14) & 0xff : pkt.readUInt8(14);
-    const clientDmg = pkt.length >= 20 ? pkt.readInt16LE(18) : 0;
+    // Soul Saver: the converted packet carries the full u32 damage @24 (client: Magic x skill MATK %).
+    const clientDmg = p.soulSaver && pkt.length >= 28 ? pkt.readUInt32LE(24) : pkt.length >= 20 ? pkt.readInt16LE(18) : 0;
+    const dmgCap = p.soulSaver ? 999999 : 9999;
     const hitSparkX = pkt.length >= 24 ? pkt.readUInt16LE(20) : 0;
     const hitSparkY = pkt.length >= 24 ? pkt.readUInt16LE(22) : 0;
     const m = getMonster(p.map, p.region, slot);
@@ -3224,13 +3226,13 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
 
     // York: trust client Damage (rolled from mindamphy/maxdamphy + gear on client).
     let dmg = clientDmg;
-    if (!Number.isFinite(dmg) || dmg <= 0 || dmg > 9999) {
+    if (!Number.isFinite(dmg) || dmg <= 0 || dmg > dmgCap) {
       const lo = Math.max(1, p.minAtk);
       const hi = Math.max(lo, p.maxAtk);
       dmg = lo + Math.floor(Math.random() * (hi - lo + 1));
       dmg = Math.max(1, dmg - Math.floor((m.def || 0) / 2));
     }
-    dmg = Math.max(1, Math.min(9999, Math.floor(dmg)));
+    dmg = Math.max(1, Math.min(dmgCap, Math.floor(dmg)));
 
     // On lethal hit, soft-align corpse X to hit spark only. Never take spark Y —
     // it is often airborne/underground and made loot rise from below the floor.

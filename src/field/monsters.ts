@@ -587,6 +587,8 @@ export function buildMonInfo(
   b.writeUInt32LE(m.hp >>> 0, 60);
   b.writeUInt16LE(hx & 0xffff, 64);
   b.writeUInt16LE(hy & 0xffff, 66);
+  // Soul Saver damage is u32 (MON_INFO 0x38 @0x34); the converter reads values above 9999 from here.
+  if (Number(dmg) > 9999) b.writeUInt32LE(Math.min(0x7fffffff, Math.floor(Number(dmg))), 68);
   return b;
 }
 

@@ -398,7 +398,9 @@ function ssStatUp(g: Buffer, charId: number): Buffer {
 function ssMonInfo(g: Buffer): Buffer {
   const s = Buffer.alloc(96, 0);
   g.copy(s, 0, 0, 0x34);
-  s.writeUInt32LE(g.readUInt16LE(52), 0x34);
+  // Damage above 9999 travels in the otherwise unused u32 @68 (see buildMonInfo).
+  const full = g.length >= 72 ? g.readUInt32LE(68) : 0;
+  s.writeUInt32LE(full > 9999 ? full : g.readUInt16LE(52), 0x34);
   s.writeUInt32LE(g.readUInt32LE(60), 0x3c);
   s.writeUInt32LE(g.readUInt32LE(60), 0x40);
   s.writeUInt8(g.readUInt16LE(54) & 0xff, 0x38);
@@ -708,13 +710,14 @@ export function fromSoulSaver(pkt: Buffer): Buffer {
   const op = pkt.readUInt16LE(2);
   const b = ENCRYPTED_IN.has(op) ? decryptBody(pkt) : pkt;
   if (op === 0x45 && b.length >= 0x30) {
-    const g = Buffer.alloc(24, 0);
+    const g = Buffer.alloc(28, 0);
     b.copy(g, 0, 0, 12);
-    g.writeUInt16LE(24, 4);
+    g.writeUInt16LE(28, 4);
     g.writeUInt16LE((b.readUInt16LE(0x10) - 1) & 0xffff, 14);
     g.writeInt16LE(Math.min(0x7fff, b.readUInt32LE(0x14)), 18);
     g.writeUInt16LE(b.readUInt16LE(0x2c), 20);
     g.writeUInt16LE(b.readUInt16LE(0x2e), 22);
+    g.writeUInt32LE(b.readUInt32LE(0x14), 24); // full damage (official u32; skills pass 9999 at high levels)
     return g;
   }
   if (op === 0x17 && b.length >= 0x28) {
