@@ -1,5 +1,6 @@
 {
   "killExpRate": 1.0,
+  "expEventRate": 1.0,
   "levelExpCurve": 1.19,
   "questExpRate": 1.2,
   "questExpFlat": 10,

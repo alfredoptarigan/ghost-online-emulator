@@ -108,6 +108,7 @@ import {
   type BoxBuff,
 } from "./spend_boxes.js";
 import { handleQuestPacket, onMonsterKill, buildQuestAll } from "./quests.js";
+import { handleQuickQuest, quickQuestLoginPackets, quickQuestLogout, quickQuestOnKill } from "./ssquickquest.js";
 import { buildMonsterBook, registerPiece } from "./monsterbook.js";
 import {
   NOVICE_GIFT,
@@ -2217,6 +2218,12 @@ async function runGmCommand(p: Player, cmdRaw: string): Promise<void> {
       await execute("UPDATE characters SET cmp=? WHERE ID=?", [p.mp, p.charId]);
       sendVital(p);
     }
+  } else if (c0 === "//expevent") {
+    // EXP event multiplier for kill + Quick Quest EXP (official Sunday event = 3). No argument = show it.
+    const v = Number(parts[1]);
+    if (Number.isFinite(v) && v > 0 && v <= 100) rates.expEventRate = v;
+    console.log(`[field] GM ${p.name} expevent=${rates.expEventRate}`);
+    send(p, notice(`EXP event x${rates.expEventRate}`, 3));
   } else if (c0 === "//money") {
     const amt = Number(parts[1] ?? 10000);
     p.money += amt;
@@ -3129,6 +3136,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     send(p, mapInfo(p));
     send(p, await buildQuestAll(p.charId, p.soulSaver));
     if (p.soulSaver) send(p, await buildMonsterBook(p.charId));
+    if (p.soulSaver) for (const q of await quickQuestLoginPackets(p.charId)) send(p, q); // running Quick Quest (S 0x35E)
     try {
       send(p, await buildQuickSlotAll(p.charId));
     } catch (e) {
@@ -3403,6 +3411,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       // (namuwiki 무리 / SSO tips — main reason PT levels faster).
       for (const pl of recipients) {
         for (const q of await onMonsterKill(pl.charId, m.template, pl.soulSaver)) send(pl, q);
+        if (pl.soulSaver) for (const q of await quickQuestOnKill(pl.charId, m.template)) send(pl, q);
       }
     } else {
       // legacy: status 7 then immediate status 1 at same coords (keeps walk clip alive).
@@ -3811,6 +3820,19 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
   // Soul Saver Auto Hunt tray (ssautohunt.ts).
   if ((op === 0x0740 || op === 0x0742 || op === 0x0744 || op === 0x0746) && p.soulSaver) {
     await handleAutoHunt(p, op, pkt);
+    return;
+  }
+
+  // Soul Saver Quick Quest: C 0x35F mode @12 (1 accept, 2 claim, 3 give up), questId @16 -> S 0x35E (ssquickquest.ts).
+  if (op === 0x035f && p.soulSaver) {
+    const r = await handleQuickQuest(p.charId, p.level, pkt);
+    console.log(`[field] quick quest char=${p.charId} mode=${pkt.length > 12 ? pkt[12] : -1} quest=${r.questId} exp=${r.exp}`);
+    if (r.exp > 0) {
+      // Official: EXP event x3 and the gear EXP bonus apply to the reward like to kill EXP (LV_EXP 0x5B, then 0x35E).
+      const mul = rates.expEventRate * (await beltExpMul(p.charId, p.level));
+      await grantMonsterExp(p, Math.floor(r.exp * mul));
+    }
+    for (const q of r.packets) send(p, q);
     return;
   }
 
@@ -4402,6 +4424,7 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
 
     sock.on("close", () => {
       beltReset(p.charId);
+      quickQuestLogout(p.charId);
       clearAvatarTimer(p.charId);
       if (p.soulSaver && p.charId) void leaveAutoHunt(p.charId).catch((e) => console.error("[field] auto hunt save", e));
       if (p.soulSaver && p.charId) void avatarLeave(p.charId).catch((e) => console.error("[field] avatar save", e));

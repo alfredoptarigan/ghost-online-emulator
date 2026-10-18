@@ -1034,11 +1034,12 @@ export function monsterExp(m: Monster): number {
   // The official server gives no EXP for the tutorial monk (no LV_EXP 0x5B until the first quest).
   if (m.template === 1090023) return 0;
   const tb = tbMobRow(m.template);
-  if (tb) return Math.max(1, Math.floor(tb.exp * rates.killExpRate));
+  // Official EXP event: exactly nMobEXP x 3 (rates.expEventRate).
+  if (tb) return Math.max(1, Math.floor(tb.exp * rates.killExpRate * rates.expEventRate));
   // Laidai/Big-eye early curve; else level * monsterExpPerLevel, then killExpRate
   let base: number;
   if (m.template === 1000101) base = 8 + Math.floor(Math.random() * 5);
   else if (m.template === 1000201) base = 12 + Math.floor(Math.random() * 6);
   else base = Math.max(5, m.level * rates.monsterExpPerLevel);
-  return Math.max(1, Math.floor(base * rates.killExpRate));
+  return Math.max(1, Math.floor(base * rates.killExpRate * rates.expEventRate));
 }

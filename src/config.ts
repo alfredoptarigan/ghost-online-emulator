@@ -24,6 +24,7 @@ function requireEnv(name: string): string {
 
 type RatesFile = {
   killExpRate?: number;
+  expEventRate?: number;
   levelExpCurve?: number;
   questExpRate?: number;
   questExpFlat?: number;
@@ -74,6 +75,11 @@ export const rates = {
   /** Multiplier on monster kill EXP awards. */
   killExpRate: rate("KILL_EXP_RATE", fileRates.killExpRate, 1.0),
   /** Level-up mexp growth (legacy $MAXEXPRATE). */
+  /**
+   * EXP event multiplier (official Sunday event = 3): kill EXP and Soul Saver Quick Quest EXP only, not the Monster
+   * Encyclopedia reward. GM: //expevent <rate>.
+   */
+  expEventRate: rate("EXP_EVENT_RATE", fileRates.expEventRate, 1.0),
   levelExpCurve: rate("LEVEL_EXP_CURVE", fileRates.levelExpCurve, 1.19),
   questExpRate: rate("QUEST_EXP_RATE", fileRates.questExpRate, 1.2),
   questExpFlat: rate("QUEST_EXP_FLAT", fileRates.questExpFlat, 10),
