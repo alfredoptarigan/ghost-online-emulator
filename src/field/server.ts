@@ -123,6 +123,7 @@ import {
 import { storeBuy } from "./npcstore.js";
 import { loadPhantoms, phantomMuls, unsealItem } from "./phantom.js";
 import { refreshSsJob } from "./ssjob.js";
+import { learnSkill, learnResultPacket } from "./sslearn.js";
 import { ssAttr, ssMaxLevel, ssSkill, ssSkillClients, ssSkillCost, ssSkillHeal, ssSyncJobSkills } from "./ssskills.js";
 import { beltAbsorb, beltCheckWorn, beltDecay, beltExpMul, beltPacket, beltReset } from "./belt.js";
 import { expireSsBuffs, isSsBuffItem, loadSsBuffs, ssRecover, ssUse, ssUseVisual, startSsBuff } from "./ssuse.js";
@@ -3533,6 +3534,22 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     await execute("UPDATE characters SET money=? WHERE ID=?", [p.money, p.charId]);
     send(p, moneyPacket(p.money, gain));
     for (const pkt of await refreshBagPackets(p.charId, type, p.magic || 0x0037)) send(p, pkt);
+    return;
+  }
+
+  // Soul Saver C 0x25B = learn a skill at an NPC (u32 skillId @12) -> S 0x25C result (see sslearn.ts).
+  if (op === 0x025b && p.soulSaver) {
+    const skillId = pkt.length >= 16 ? pkt.readUInt32LE(12) : 0;
+    const res = await learnSkill(p.charId, skillId);
+    console.log(`[field] learn-skill char=${p.charId} skill=${skillId} ${res.name} result=${res.result} cost=${res.cost}`);
+    send(p, learnResultPacket(res.result, skillId));
+    if (res.result === 1) {
+      p.money -= res.cost;
+      send(p, moneyPacket(p.money, -res.cost));
+      send(p, await buildSkillAll(p.charId));
+      await applySsStats(p); // passives (PhysicalTraining ...) may change the stats
+      send(p, await charAll(p.charId));
+    }
     return;
   }
 
