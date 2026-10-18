@@ -3724,6 +3724,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     if (res.ok) {
       send(p, buildSkillLevelUpAck(res.skPoint, type, slot, res.level));
       send(p, await buildSkillAll(p.charId));
+      await applySsStats(p); // mastery passives (YinYangCharge ...) change the attack
       send(p, await charAll(p.charId));
       console.log(
         `[field] skill-up char=${p.charId} type=${type} slot=${slot} skill=${res.skillId} lv=${res.level} sk=${res.skPoint}`,
