@@ -1920,6 +1920,8 @@ async function grantMonsterExp(p: Player, amount: number): Promise<boolean> {
   while (p.exp >= p.mexp && p.mexp > 0) {
     p.exp -= p.mexp;
     p.level++;
+    // Official (capture day1_stage1, 35 level-ups): EXP restarts at 0 on the new level; the rest is lost.
+    if (ss) p.exp = 0;
     if (ss) {
       // Soul Saver: tb_Exp curve, +4 stat / +2 skill points per level (official capture).
       p.mexp = ssExpForLevel(p.level) || p.mexp;

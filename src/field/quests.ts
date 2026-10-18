@@ -270,6 +270,8 @@ async function addExp(cid: number, amount: number): Promise<void> {
     level += 1;
     if (ss) {
       // Soul Saver: tb_Exp curve and +4/+2 points, so the starter quests level a new character as officially.
+      // Official: the new level starts at 0 EXP (quest 1107 at lv5 15/398 + 500 -> lv6 0/690).
+      exp = 0;
       st += SS_STAT_POINTS_PER_LEVEL;
       sk += SS_SKILL_POINTS_PER_LEVEL;
       mexp = ssExpForLevel(level) || mexp;
