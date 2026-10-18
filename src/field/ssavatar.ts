@@ -18,7 +18,7 @@
 import type { RowDataPacket } from "mysql2";
 import { query, execute } from "../db.js";
 import { writeHeader } from "../net/packet.js";
-import { ssMaxLevel } from "./ssskills.js";
+import { ssAttr, ssMaxLevel } from "./ssskills.js";
 
 export const AVATAR_MAX_POWER = 1800;
 
@@ -48,6 +48,8 @@ export function avatarSkills(level: number): { a: Array<[number, number]>; b: Ar
   return { a, b };
 }
 
+type Jar = { item: number; lv: number; dur: number };
+
 type Avatar = {
   level: number;
   exp: number;
@@ -59,8 +61,10 @@ type Avatar = {
   /** ms when the power was last drained (state 2). */
   since: number;
   /** Registered avatar jars (S 0x265, max 12) and the equipped index (-1 none). */
-  jars: number[];
+  jars: Jar[];
   jarEq: number;
+  /** ms of the last 300 s duration tick. */
+  jarTick: number;
   /** Character level last seen (jar level = level / 10). */
   charLevel: number;
 };
@@ -104,10 +108,14 @@ export async function loadAvatar(charId: number): Promise<Avatar> {
     day: Number(r?.day ?? 0),
     state: 0,
     since: 0,
+    // "item:level:duration" per jar (the first version stored the item only)
     jars: String(r?.jars ?? "")
       .split(",")
-      .map(Number)
-      .filter((x) => x > 0),
+      .filter(Boolean)
+      .map((e) => e.split(":").map(Number))
+      .filter(([item]) => item! > 0)
+      .map(([item, lv, dur]) => ({ item: item!, lv: Math.max(1, lv || 1), dur: dur || 0 })),
+    jarTick: Date.now(),
     jarEq: Number(r?.jar_eq ?? -1),
     charLevel: 1,
   };
@@ -128,7 +136,7 @@ export async function saveAvatar(charId: number): Promise<void> {
     "INSERT INTO ss_avatar (charid, level, exp, power, day, jars, jar_eq) VALUES (?, ?, ?, ?, ?, ?, ?) " +
       "ON DUPLICATE KEY UPDATE level=VALUES(level), exp=VALUES(exp), power=VALUES(power), day=VALUES(day), " +
       "jars=VALUES(jars), jar_eq=VALUES(jar_eq)",
-    [charId, av.level, av.exp, av.power, av.day, av.jars.join(","), av.jarEq],
+    [charId, av.level, av.exp, av.power, av.day, av.jars.map((j) => `${j.item}:${j.lv}:${j.dur}`).join(","), av.jarEq],
   );
 }
 
@@ -188,10 +196,26 @@ export async function avatarLeave(charId: number): Promise<void> {
  * A spirit picked up while transformed: avatar EXP (official +14 at character lv15, ~+20 at lv30, +22 at lv35;
  * one level at a time, leftover EXP kept). Returns the 0x26A packets and whether the avatar levelled.
  */
-export async function gainAvatarExp(charId: number, charLevel: number): Promise<{ packets: Buffer[]; leveled: boolean }> {
+export async function gainAvatarExp(
+  charId: number,
+  charLevel: number,
+): Promise<{ packets: Buffer[]; leveled: boolean; jarLeveled: boolean }> {
   const av = await loadAvatar(charId);
-  if (av.state !== 2) return { packets: [], leveled: false };
-  const k = Math.min(av.level, 5) * 1000;
+  if (av.state !== 2) return { packets: [], leveled: false, jarLeveled: false };
+  av.charLevel = charLevel;
+  // The equipped jar fills too (official: +1000 x jar level per spirit up to 4000 + 1000 x level; full and allowed by
+  // the character level, the next spirit raises the jar level and the duration restarts at 1000 x new level).
+  let jarLeveled = false;
+  const jar = av.jars[av.jarEq];
+  if (jar) {
+    drainJars(av);
+    if (jar.dur >= jarCap(jar.lv) && jar.lv < jarMaxLevel(charLevel)) {
+      jar.lv++;
+      jar.dur = 1000 * jar.lv;
+      jarLeveled = true;
+    } else jar.dur = Math.min(jarCap(jar.lv), jar.dur + 1000 * jar.lv);
+  }
+  const k = jar?.dur ?? 0;
   av.exp += Math.round(8 + 0.4 * charLevel);
   const packets = [avatarExpPacket(av.exp, k)];
   let leveled = false;
@@ -202,7 +226,7 @@ export async function gainAvatarExp(charId: number, charLevel: number): Promise<
     packets.push(avatarExpPacket(av.exp, k));
   }
   await saveAvatar(charId);
-  return { packets, leveled };
+  return { packets, leveled, jarLeveled };
 }
 
 /** S 0x261 (24 B, parser FUN_012d3810): charId u16 @12, state u16 @14 (1 cast, 2 transformed, 0 normal), -1 @16. */
@@ -231,7 +255,7 @@ export function avatarInfoPacket(charId: number): Buffer {
   return b;
 }
 
-/** S 0x26A (20 B): avatar EXP u32 @12, u32 @16 (official min(level, 5) * 1000). */
+/** S 0x26A (20 B): avatar EXP u32 @12, duration of the equipped jar u32 @16 (FUN_013026e0). */
 function avatarExpPacket(exp: number, k: number): Buffer {
   const b = Buffer.alloc(20, 0);
   writeHeader(b, 0x026a, 20);
@@ -303,19 +327,44 @@ const JAR_SKILL_BASE: Record<number, number> = {
   8843901: 3010, 8843902: 3020, 8843912: 3020, 8843903: 3030, 8843913: 3030,
 };
 export const SS_START_JARS = [8843801, 8843901];
+const JAR_TICK_MS = 300_000;
 
 export function isAvatarJar(itemId: number): boolean {
   return Math.floor(itemId / 100) === 88438 || Math.floor(itemId / 100) === 88439;
 }
 
-const jarLevel = (charLevel: number) => Math.max(1, Math.floor(charLevel / 10));
+/** Max jar level = character level / 10 (S 0x265 @0x0D). */
+const jarMaxLevel = (charLevel: number) => Math.max(1, Math.floor(charLevel / 10));
+/** Duration cap: official lv1 5000, lv2 6000. */
+const jarCap = (lv: number) => 4000 + 1000 * lv;
+
+/**
+ * Level of jar skill i (0 = passive, max 20; 1..7 = attack skills, max 8) at jar level L - client FUN_01300050:
+ * needs L >= |2i - 1| (1, 1, 3, 5, 7, 9, 11, 13); then L for the passive and the first skill, else L - need + 1.
+ */
+export function jarSkillLevel(i: number, L: number): number {
+  const need = Math.abs(2 * i - 1);
+  const max = i === 0 ? 20 : 8;
+  if (L < need) return 0;
+  const d = L - need;
+  if (d >= max) return max;
+  return need < 3 ? need + d : d + 1;
+}
+
+/** Official: the jar duration drops by its level every 300 s (also outside avatar mode). */
+function drainJars(av: Avatar): void {
+  const ticks = Math.floor((Date.now() - av.jarTick) / JAR_TICK_MS);
+  if (ticks <= 0) return;
+  av.jarTick += ticks * JAR_TICK_MS;
+  for (const j of av.jars) if (j.dur > 0) j.dur = Math.max(0, j.dur - j.lv * ticks);
+}
 
 /** Official lv10: both basic jars appear in the list. Returns true when the list changed. */
 export async function grantStartJars(charId: number, charLevel: number): Promise<boolean> {
   const av = await loadAvatar(charId);
   av.charLevel = charLevel;
   if (charLevel < 10 || av.jars.length) return false;
-  av.jars = [...SS_START_JARS];
+  av.jars = SS_START_JARS.map((item) => ({ item, lv: 1, dur: 0 }));
   await saveAvatar(charId);
   return true;
 }
@@ -323,8 +372,8 @@ export async function grantStartJars(charId: number, charLevel: number): Promise
 /** Register a jar item (use type 25). Returns false when it is already registered or the list is full. */
 export async function registerJar(charId: number, itemId: number): Promise<boolean> {
   const av = await loadAvatar(charId);
-  if (av.jars.includes(itemId) || av.jars.length >= 12) return false;
-  av.jars.push(itemId);
+  if (av.jars.some((j) => j.item === itemId) || av.jars.length >= 12) return false;
+  av.jars.push({ item: itemId, lv: 1, dur: 0 });
   await saveAvatar(charId);
   return true;
 }
@@ -332,42 +381,70 @@ export async function registerJar(charId: number, itemId: number): Promise<boole
 /** Equip the jar at a list index; returns its item id, or 0 for a bad index. */
 export async function equipJar(charId: number, idx: number): Promise<number> {
   const av = await loadAvatar(charId);
-  const item = av.jars[idx] ?? 0;
+  const item = av.jars[idx]?.item ?? 0;
   if (!item) return 0;
   av.jarEq = idx;
   await saveAvatar(charId);
   return item;
 }
 
-/** Attack skill of the equipped jar for skill book 0, as [skill, level]; null when none. */
-export function jarSkill(charId: number): [number, number] | null {
+function equippedJar(charId: number): { base: number; lv: number } | null {
   const av = avatars.get(charId);
-  const charLevel = av?.charLevel ?? 1;
-  const item = av ? (av.jars[av.jarEq] ?? 0) : 0;
-  const base = JAR_SKILL_BASE[item];
-  if (!base) return null;
-  return [base + 1, Math.min(ssMaxLevel(base + 1), jarLevel(charLevel))];
+  const jar = av?.jars[av.jarEq];
+  const base = jar ? JAR_SKILL_BASE[jar.item] : 0;
+  return base && jar ? { base, lv: jar.lv } : null;
+}
+
+/** Unlocked attack skills of the equipped jar (x1..x7) as [skill, level] for skill book 0. */
+export function jarSkills(charId: number): Array<[number, number]> {
+  const j = equippedJar(charId);
+  if (!j) return [];
+  const out: Array<[number, number]> = [];
+  for (let i = 1; i <= 7; i++) {
+    const lv = Math.min(ssMaxLevel(j.base + i), jarSkillLevel(i, j.lv));
+    if (lv > 0) out.push([j.base + i, lv]);
+  }
+  return out;
+}
+
+/**
+ * Avatar attack % of the equipped jar's passive (WhiteSpirit 2010 / BlackSpirit 3010 ... attr 12: 131 % at jar
+ * level 1, 132 % at 2). Official avatar attack with a jar = flat part + floor((INT/STR part + DEX part + weapon) x %);
+ * all 12 captured values (lv15-22, jar lv1/2) match exactly. 100 without a jar.
+ */
+export function jarAttackPct(charId: number): number {
+  const j = equippedJar(charId);
+  if (!j) return 100;
+  return ssAttr(j.base, 12, Math.min(ssMaxLevel(j.base), jarSkillLevel(0, j.lv))) || 100;
 }
 
 /**
  * S 0x265 (128 B, FUN_01302500): equipped index i8 @0x0C (-1 none), max jar level i8 @0x0D, 12 entries: level i8
- * @0x0E+i, jar item u32 @0x1C+4i, duration u32 @0x4C+4i (official lv1 5000, lv2 6000, the window "Duration"),
- * byte @0x7C (1 = jar levelled).
+ * @0x0E+i, jar item u32 @0x1C+4i, duration u32 @0x4C+4i (the window "Duration"), byte @0x7C (1 = jar levelled).
+ * Official: sent every 300 s (with the duration drain), at every 10th character level and after a jar level up.
  */
-export function avatarJarsPacket(charId: number, charLevel: number): Buffer {
+export function avatarJarsPacket(charId: number, charLevel: number, leveled = false): Buffer {
   const av = avatars.get(charId);
-  if (av) av.charLevel = charLevel;
+  if (av) {
+    av.charLevel = charLevel;
+    drainJars(av);
+  }
   const b = Buffer.alloc(128, 0);
   writeHeader(b, 0x0265, 128);
-  const lv = jarLevel(charLevel);
   b.writeInt8(av && av.jars[av.jarEq] ? av.jarEq : -1, 0x0c);
-  b.writeInt8(lv, 0x0d);
-  (av?.jars ?? []).slice(0, 12).forEach((item, i) => {
-    b.writeInt8(lv, 0x0e + i);
-    b.writeUInt32LE(item, 0x1c + 4 * i);
-    b.writeUInt32LE(4000 + 1000 * lv, 0x4c + 4 * i);
+  b.writeInt8(jarMaxLevel(charLevel), 0x0d);
+  (av?.jars ?? []).slice(0, 12).forEach((j, i) => {
+    b.writeInt8(j.lv, 0x0e + i);
+    b.writeUInt32LE(j.item, 0x1c + 4 * i);
+    b.writeUInt32LE(j.dur, 0x4c + 4 * i);
   });
+  if (leveled) b.writeUInt8(1, 0x7c);
   return b;
+}
+
+/** Characters with registered jars (for the 300 s S 0x265 tick). */
+export function charsWithJars(): number[] {
+  return [...avatars.entries()].filter(([, av]) => av.jars.length).map(([id]) => id);
 }
 
 /** S 0x268 (24 B, FUN_01303820): charId u32 @12, jar item u32 @16, list index i8 @0x14, 1 @0x15 (equipped). */

@@ -136,6 +136,7 @@ import {
   avatarInfoPacket,
   avatarJarEquipPacket,
   avatarJarsPacket,
+  charsWithJars,
   equipJar,
   grantStartJars,
   isAvatarJar,
@@ -2803,6 +2804,14 @@ async function ssAvatarSpirit(p: Player): Promise<void> {
   if (!p.soulSaver || !avatarActive(p.charId)) return;
   const r = await gainAvatarExp(p.charId, p.level);
   for (const out of r.packets) send(p, out);
+  if (r.jarLeveled) {
+    // Official jar level up (t=4275): SKILL_ALL (jar skills), 0x2DB, stat packets, S 0x265 with @0x7C = 1.
+    send(p, await buildSkillAll(p.charId));
+    send(p, avatarCancelTailPacket());
+    if (!r.leveled) await sendSsStatBundle(p);
+    send(p, avatarJarsPacket(p.charId, p.level, true));
+    console.log(`[field] avatar char=${p.charId} jar level up`);
+  }
   if (!r.leveled) return;
   await sendSsStatBundle(p);
   send(p, avatarSkillsPacket(p.charId));
@@ -4039,6 +4048,14 @@ export async function startFieldServer(): Promise<{ tcp: net.Server; udp: dgram.
       if (pl?.soulSaver) for (const out of packets) send(pl, out);
     }
   }, 10_000);
+
+  // Soul Saver avatar jars: official S 0x265 every 300 s (the jar duration drops by its level).
+  setInterval(() => {
+    for (const charId of charsWithJars()) {
+      const pl = players.get(charId);
+      if (pl?.soulSaver && pl.loggedIn) send(pl, avatarJarsPacket(charId, pl.level));
+    }
+  }, 300_000);
 
   // Soul Saver belt: 1 point per minute.
   setInterval(() => {

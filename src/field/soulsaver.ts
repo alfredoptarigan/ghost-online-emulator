@@ -7,7 +7,7 @@
 import { config } from "../config.js";
 import { getTrade } from "./trade.js";
 import { ssJobBytes } from "./ssjob.js";
-import { avatarLevel, avatarSkills, jarSkill } from "./ssavatar.js";
+import { avatarLevel, avatarSkills, jarSkills } from "./ssavatar.js";
 
 /** Base body item (client builds its own preview ENTERPLAYER with this at +0x84). */
 export const SS_DEFAULT_BODY = 9000006;
@@ -326,15 +326,14 @@ function ssSkillAll(g: Buffer, charId: number): Buffer {
     }
   };
   short(12, 32, 0x0c, 0x20, 10);
-  // Equipped avatar jar: its attack skill (WhiteBall 2011 / DarkBall 3011) sits in book 0 after the common skills.
-  const js = jarSkill(charId);
-  if (js) {
+  // Equipped avatar jar: its unlocked attack skills (WhiteBall 2011 / DarkBall 3011, then x2..x7 from jar level 3, 5, ...)
+  // sit in book 0 after the common skills (official: 2011 right after skills 1..5).
+  for (const [id, lv] of jarSkills(charId)) {
     let i = 0;
-    while (i < 10 && s.readInt16LE(0x0c + 2 * i) !== 0 && s.readInt16LE(0x0c + 2 * i) !== js[0]) i++;
-    if (i < 10) {
-      s.writeInt16LE(js[0], 0x0c + 2 * i);
-      s.writeUInt8(js[1], 0x20 + i);
-    }
+    while (i < 10 && s.readInt16LE(0x0c + 2 * i) !== 0 && s.readInt16LE(0x0c + 2 * i) !== id) i++;
+    if (i >= 10) break;
+    s.writeInt16LE(id, 0x0c + 2 * i);
+    s.writeUInt8(lv, 0x20 + i);
   }
   short(42, 62, 0x34, 0x5c, 10);
   short(72, 92, 0x84, 0x98, 10);

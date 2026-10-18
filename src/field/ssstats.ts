@@ -26,7 +26,7 @@ import { query, execute } from "../db.js";
 import { config } from "../config.js";
 import { ssWeaponAttack } from "./soulsaver.js";
 import { ssAttr, ssMaxLevel, ssSkill } from "./ssskills.js";
-import { avatarActive, avatarMods } from "./ssavatar.js";
+import { avatarActive, avatarMods, jarAttackPct } from "./ssavatar.js";
 
 export const SS_STAT_POINTS_PER_LEVEL = 4;
 export const SS_SKILL_POINTS_PER_LEVEL = 2;
@@ -136,7 +136,7 @@ export function ssDerive(
   growth: Array<[cls: number, fromLevel: number]> = [],
   faction = 0,
   mastery: { patk: number; matk: number } = { patk: 100, matk: 100 },
-  avatar: { a: number[]; active: boolean } = { a: [3, 3, 0, 0, 0], active: false },
+  avatar: { a: number[]; active: boolean; jarPct?: number } = { a: [3, 3, 0, 0, 0], active: false },
 ): SsStats {
   const jt = (jobs ??= load<JobsTable>("ss_jobs.json", (j) => j, { base: [], growth: [] }));
   const it0 = (items ??= load<ItemsTable>("ss_items.json", (j) => j.items ?? {}, {}));
@@ -219,12 +219,14 @@ export function ssDerive(
   if (avatar.active) {
     // Official avatar CHAR_ALL (lv14-22, avatar L1-12): HP/MP/def = base + avatar stat (no equipment), attack base =
     // the better of phys/magic without equipment + the weapon (no mastery); magic = base + 10, phys = base + avatar
-    // phys stat. After C 0x267 (avatar skill set) the official attack is ~9-15 % higher still (not implemented).
+    // phys stat. An equipped jar multiplies that base by its passive (WhiteSpirit 131 % at jar lv1, 132 % at lv2: all
+    // official values after C 0x267 match floor(base x %)).
+    const jp = avatar.jarPct ?? 100;
     const pMax = sAtt + dMax + wPhy;
     const mMax = iAtt + dMax + wMag;
     const useMag = mMax >= pMax;
-    const baseMax = useMag ? mMax : pMax;
-    const baseMin = useMag ? iAtt + dMin + wMag : sAtt + dMin + wPhy;
+    const baseMax = Math.floor(((useMag ? mMax : pMax) * jp) / 100);
+    const baseMin = Math.floor(((useMag ? iAtt + dMin + wMag : sAtt + dMin + wPhy) * jp) / 100);
     return {
       maxHp: hpBase + av[0]!,
       maxMp: mpBase + av[1]!,
@@ -324,7 +326,7 @@ export async function recomputeSsStats(charId: number): Promise<SsStats | null> 
     growth,
     faction,
     await masteryOf(charId, wornIds),
-    avatarMods(charId),
+    { ...avatarMods(charId), jarPct: jarAttackPct(charId) },
   );
   const pas = await passiveBonus(charId);
   s.maxHp += pas.hp;
