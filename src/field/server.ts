@@ -2655,8 +2655,14 @@ async function ssLevelUpRewards(p: Player, fromLevel: number, toLevel: number): 
       levelUpEvents = [];
     }
   }
+  // Official lv18 (capture day1_stage1): no gift for 7201047, whose item.itm name is untranslated ("[...]" in
+  // Korean): such rows are not live on the English service.
+  const names: Record<string, { n?: string }> = JSON.parse(
+    fs.readFileSync(path.join(config.dataDir, "ss_items.json"), "utf8"),
+  ).items ?? {};
   const gifts = levelUpEvents!
     .filter((e) => e.nLevel > fromLevel && e.nLevel <= toLevel)
+    .filter((e) => !/^[[^ -]+]$/.test(names[e.nItemID]?.n ?? ""))
     .map((e) => ({ itemId: e.nItemID, count: Math.max(1, e.nItemCount), tab: e.eInvenNo }));
   if (!gifts.length) return;
   console.log(`[field] level-up reward char=${p.charId} lv${fromLevel}->${toLevel} ${gifts.map((g) => g.itemId).join(",")}`);
