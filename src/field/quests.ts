@@ -1,3 +1,4 @@
+import { beltExpMul } from "./belt.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { RowDataPacket } from "mysql2";
@@ -304,7 +305,12 @@ async function applySsRewards(cid: number, q: SsQuest, chosen = 0): Promise<Buff
   const items = pick.length ? pick : (q.items ?? []);
   for (const [iid, n] of q.remove ?? []) out.push(...(await removeItemById(cid, iid, n)));
   if (q.money) await addMoney(cid, q.money);
-  if (q.exp) await addExp(cid, q.exp);
+  if (q.exp) {
+    // Official: the worn belt doubles quest EXP too (DongkuaBelt +100 % up to lv30: quests at lv10-30 gave
+    // 2.0-2.1 x the quest.luc EXP, at lv33+ 1.1 x / 1.0 x).
+    const lv = await query<RowDataPacket[]>("SELECT level FROM characters WHERE ID=?", [cid]);
+    await addExp(cid, Math.floor(q.exp * (await beltExpMul(cid, Number(lv[0]?.level ?? 1)))));
+  }
   if (q.fame) await addFame(cid, q.fame);
   for (const [iid, n] of items) {
     const bag = await addItemToInventory(cid, iid, n);
