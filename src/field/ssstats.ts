@@ -5,11 +5,18 @@
  *   max HP = 1 + floor(CON*ConHP + STR*StrHP) + level*growthHP      (Magic User lv1: 1 + 64 + 10 = 75)
  *   max MP = 1 + floor(INT*IntSP) + level*growthSP                    (lv1: 1 + 9 + 15 = 25)
  *   phys   = floor(STR*StrAtt) + floor(DEX*DexMax) / … + floor(DEX*DexMin)   (10 / 8)
- *   magic  = 7 + floor(INT*IntAtt), min = max - 2                     (13 / 11; 40 / 38 at INT 15)
+ *   magic  = floor(INT*IntAtt) + floor(DEX*DexMax) / ... + floor(DEX*DexMin)  (13 / 11; 40 / 38 at INT 15)
  *   def    = floor(CON*ConDef)                                        (14)
  * plus the worn equipment (weapon: item f[4] phys, f[5] magic; armor: f[4] def — TrainingFan magic +8 and
  * BasicClothes def +3 give the official 21/19 magic and defense 17). Growth uses the Novice row until a faction
  * is chosen (+10 HP / +15 MP per level, as captured). Level up: +4 stat points, +2 skill points.
+ * Equipment columns (official capture day1_stage1, Magic User lv1-35; f[] = ss_items.json f index):
+ *   weapon (s1, worn slot 0 only; slot 17 = avatar amulet, no stats): f[4] phys, f[5] magic, f[3] weapon type
+ *   armor s2 f[4] def; costume s3 f[3] def; ring s4 f[2..5] STR/DEX/CON/INT, f[6] phys, f[8] magic;
+ *   necklace s5 f[7] HP, f[8] MP; hat s9 f[6] HP, f[7] MP; toy s17 f[8] magic (counted with the weapon);
+ *   belt s24 f[2] def, f[4] DEX. Face accessories, hair, eyes, skin and seals add nothing.
+ * Weapon mastery (passive, attr 12 PATK % / 13 MATK %, e.g. YinYangCharge for fans) multiplies the attack with the
+ * weapon: official lv20-30 FairyFan/PhoenixFan with YinYangCharge 19/20 fit (base + weapon) x 157/160 % within ~10.
  * Only characters created through the Soul Saver client (characters.ss_char = 1) use these rules.
  */
 import fs from "node:fs";
@@ -18,6 +25,7 @@ import type { RowDataPacket } from "mysql2";
 import { query, execute } from "../db.js";
 import { config } from "../config.js";
 import { ssWeaponAttack } from "./soulsaver.js";
+import { ssAttr } from "./ssskills.js";
 
 export const SS_STAT_POINTS_PER_LEVEL = 4;
 export const SS_SKILL_POINTS_PER_LEVEL = 2;
@@ -107,6 +115,15 @@ export type SsStats = {
   def: number;
 };
 
+/** Weapon type (item f[3]) -> mastery skill (YinYangCharge verified by capture, the others by skill name). */
+const MASTERY: Record<number, number> = {
+  1001: 10101, 1002: 10102, 1003: 10202, 1005: 10301, 1006: 10302, 1007: 10401, 1008: 10402, 1009: 10501,
+  1010: 10502, 1011: 10601, 1105: 11301, 1106: 11302,
+};
+export function ssMasterySkill(weaponType: number): number {
+  return MASTERY[weaponType] ?? 0;
+}
+
 export function ssDerive(
   job: number,
   level: number,
@@ -114,9 +131,10 @@ export function ssDerive(
   dex: number,
   con: number,
   int: number,
-  worn: number[],
+  worn: Array<[slot: number, itemId: number]>,
   growth: Array<[cls: number, fromLevel: number]> = [],
   faction = 0,
+  mastery: { patk: number; matk: number } = { patk: 100, matk: 100 },
 ): SsStats {
   const jt = (jobs ??= load<JobsTable>("ss_jobs.json", (j) => j, { base: [], growth: [] }));
   const it0 = (items ??= load<ItemsTable>("ss_items.json", (j) => j.items ?? {}, {}));
@@ -124,7 +142,6 @@ export function ssDerive(
   const novice = jt.growth.find((r) => r.eClass === 0) ?? { nGlowthHP: 1000, nGlowthSP: 1500 };
   const rowOf = (gc: number) =>
     (gc > 0 && jt.growth.find((r) => r.eClass === gc && r.eJob === job && (gc < 2 || r.eFaction === faction))) || novice;
-  // Level  (1..level) grows with the last class recorded at a level below .
   let gHp = 0;
   let gMp = 0;
   for (let l = 1; l <= level; l++) {
@@ -136,33 +153,69 @@ export function ssDerive(
     gMp += row.nGlowthSP;
   }
   const c = (v: number | undefined) => (v ?? 0) / 100;
+  let wPhy = 0; // counted with the weapon only (weapon, toy)
+  let wMag = 0;
   let phyAdd = 0;
   let magAdd = 0;
   let defAdd = 0;
   let hpAdd = 0;
   let mpAdd = 0;
-  for (const id of worn) {
-    const it = it0[id];
-    if (!it?.f) continue;
-    if (it.s === 1) {
-      phyAdd += it.f[4] ?? 0;
-      magAdd += it.f[5] ?? 0;
-    } else if (it.s === 2) {
-      defAdd += it.f[4] ?? 0;
-    } else if (it.s === 9) {
-      // Hats: f[6] max HP, f[7] max MP (official capture day1_stage1: RedPolkaDotHat(F) 150/150 = +150 HP/MP).
-      hpAdd += it.f[6] ?? 0;
-      mpAdd += it.f[7] ?? 0;
+  for (const [slot, id] of worn) {
+    const f = it0[id]?.f;
+    if (!f) continue;
+    const v = (i: number) => f[i] ?? 0;
+    switch (it0[id]!.s) {
+      case 1: // weapon; slot 17 (avatar amulet) adds nothing outside avatar mode
+        if (slot === 0) {
+          wPhy += v(4);
+          wMag += v(5);
+        }
+        break;
+      case 2: // armor
+        defAdd += v(4);
+        break;
+      case 3: // costume: RedPolkaDotSet(F) f[3] 5 = def +5
+        defAdd += v(3);
+        break;
+      case 4: // ring: NoviceRing f[3] 4 = DEX +4, f[6] 20 phys, f[8] 20 magic
+        str += v(2);
+        dex += v(3);
+        con += v(4);
+        int += v(5);
+        phyAdd += v(6);
+        magAdd += v(8);
+        break;
+      case 5: // necklace: NoviceNecklace f[7]/f[8] 150 = HP/MP +150
+        hpAdd += v(7);
+        mpAdd += v(8);
+        break;
+      case 9: // hat: RedPolkaDotHat(F) f[6]/f[7] 150 = HP/MP +150
+        hpAdd += v(6);
+        mpAdd += v(7);
+        break;
+      case 17: // toy: NekoDoll f[8] 10 = magic +10 (with the weapon)
+        wMag += v(8);
+        break;
+      case 24: // belt: DongkuaBelt f[2] 2 = def +2, f[4] 1 = DEX +1
+        defAdd += v(2);
+        dex += v(4);
+        break;
     }
   }
-  const magBase = 7 + Math.floor(int * c(b?.nStateIntAtt));
+  const sAtt = Math.floor(str * c(b?.nStateStrAtt));
+  const iAtt = Math.floor(int * c(b?.nStateIntAtt));
+  const dMax = Math.floor(dex * c(b?.nStateDexMax));
+  const dMin = Math.floor(dex * c(b?.nStateDexMin));
+  const pm = (x: number) => Math.floor(((x + wPhy) * (mastery.patk || 100)) / 100);
+  const mm = (x: number) => Math.floor(((x + wMag) * (mastery.matk || 100)) / 100);
   return {
     maxHp: 1 + Math.floor(con * c(b?.nStateConHP) + str * c(b?.nStateStrHP)) + Math.floor(gHp / 100) + hpAdd,
     maxMp: 1 + Math.floor(int * c(b?.nStateIntSP)) + Math.floor(gMp / 100) + mpAdd,
-    phyMax: Math.floor(str * c(b?.nStateStrAtt)) + Math.floor(dex * c(b?.nStateDexMax)) + phyAdd,
-    phyMin: Math.floor(str * c(b?.nStateStrAtt)) + Math.floor(dex * c(b?.nStateDexMin)) + phyAdd,
-    magMax: magBase + magAdd,
-    magMin: magBase - 2 + magAdd,
+    phyMax: pm(sAtt + dMax + phyAdd),
+    phyMin: pm(sAtt + dMin + phyAdd),
+    // Official: DEX raises magic the same way as physical attack (+3/+1 at DEX 3 -> 4).
+    magMax: mm(iAtt + dMax + magAdd),
+    magMin: mm(iAtt + dMin + magAdd),
     def: Math.floor(con * c(b?.nStateConDef)) + defAdd,
   };
 }
@@ -170,9 +223,21 @@ export function ssDerive(
 /** Basic-attack speed/range of the worn weapon (item f[8] / f[7]; melee weapons have range 0 → 1, as official). */
 export async function refreshSsWeapon(charId: number): Promise<void> {
   const it0 = (items ??= load<ItemsTable>("ss_items.json", (j) => j.items ?? {}, {}));
-  const worn = await query<RowDataPacket[]>("SELECT type FROM equip WHERE charid=? AND pos1=0", [charId]);
+  const worn = await query<RowDataPacket[]>("SELECT type FROM equip WHERE charid=? AND pos1=0 AND pos2=0", [charId]);
   const w = worn.map((r) => it0[Number(r.type)]).find((it) => it?.s === 1 && it.f);
   ssWeaponAttack.set(charId, { speed: w?.f?.[8] || 1, range: w?.f?.[7] || 1 });
+}
+
+/** PATK/MATK % of the mastery skill for the main weapon (skill.skl attr 12/13 at the learned level). */
+async function masteryOf(charId: number, worn: Array<[number, number]>): Promise<{ patk: number; matk: number }> {
+  const it0 = (items ??= load<ItemsTable>("ss_items.json", (j) => j.items ?? {}, {}));
+  const weapon = worn.find(([slot, id]) => slot === 0 && it0[id]?.s === 1);
+  const sid = weapon ? ssMasterySkill(it0[weapon[1]]?.f?.[3] ?? 0) : 0;
+  if (!sid) return { patk: 100, matk: 100 };
+  const rows = await query<RowDataPacket[]>("SELECT points FROM skills WHERE charid=? AND skillid=?", [charId, sid]);
+  const lv = Number(rows[0]?.points ?? 0);
+  if (lv < 1) return { patk: 100, matk: 100 };
+  return { patk: ssAttr(sid, 12, lv) || 100, matk: ssAttr(sid, 13, lv) || 100 };
 }
 
 /** Recompute and store the derived stats of a Soul Saver character; null for other characters. */
@@ -184,7 +249,8 @@ export async function recomputeSsStats(charId: number): Promise<SsStats | null> 
   );
   const r = rows[0];
   if (!r) return null;
-  const worn = await query<RowDataPacket[]>("SELECT type FROM equip WHERE charid=? AND pos1=0", [charId]);
+  const worn = await query<RowDataPacket[]>("SELECT pos2, type FROM equip WHERE charid=? AND pos1=0", [charId]);
+  const wornIds: Array<[number, number]> = worn.map((w) => [Number(w.pos2), Number(w.type)]);
   const faction = Number(r.job3 ?? 0);
   const level = Number(r.level ?? 1);
   const growth: Array<[number, number]> = String(r.ss_growth ?? "")
@@ -204,9 +270,10 @@ export async function recomputeSsStats(charId: number): Promise<SsStats | null> 
     Number(r.dex ?? 3),
     Number(r.vit ?? 3),
     Number(r.intel ?? 3),
-    worn.map((w) => Number(w.type)),
+    wornIds,
     growth,
     faction,
+    await masteryOf(charId, wornIds),
   );
   await execute(
     `UPDATE characters SET cmhp=?, cmmp=?, chp=LEAST(chp, ?), cmp=LEAST(cmp, ?),
