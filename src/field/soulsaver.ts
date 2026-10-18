@@ -6,6 +6,7 @@
  */
 import { config } from "../config.js";
 import { getTrade } from "./trade.js";
+import { ssJobBytes } from "./ssjob.js";
 
 /** Base body item (client builds its own preview ENTERPLAYER with this at +0x84). */
 export const SS_DEFAULT_BODY = 9000006;
@@ -24,8 +25,14 @@ function ssCharAll(g: Buffer, charId: number): Buffer {
   const s = Buffer.alloc(216, 0);
   g.copy(s, 0, 0, 12);
   g.copy(s, 0x0c, 12, 12 + 19); // name[20]
-  g.copy(s, 0x34, 52, 57); // sex, level, job, job2, guild
-  s.writeUInt8(g.readUInt8(56), 0x3a); // faction (name colour 0/1/2)
+  g.copy(s, 0x34, 52, 55); // sex, level, job
+  // job2 @0x37 / job3 @0x38 / job4 @0x39 / faction @0x3a (ssjob.ts; official: 0xFF until reached). The Ghost guild
+  // byte used to land on job3, so a Chaos character showed a wrong Rebirth-tier title.
+  const jb = ssJobBytes.get(charId) ?? { job2: 0xff, job3: 0xff, job4: 0xff, faction: g.readUInt8(56) };
+  s.writeUInt8(jb.job2, 0x37);
+  s.writeUInt8(jb.job3, 0x38);
+  s.writeUInt8(jb.job4, 0x39);
+  s.writeUInt8(jb.faction, 0x3a);
   s.writeUInt32LE(g.readUInt16LE(58), 0x44); // max HP
   s.writeUInt32LE(g.readUInt16LE(60), 0x48); // HP
   s.writeUInt32LE(g.readUInt16LE(62), 0x4c); // max MP
@@ -65,9 +72,12 @@ function ssEnterPlayer(g: Buffer): Buffer {
   s.writeUInt8(g.readUInt8(64), 0x40); // sex
   s.writeUInt8(g.readUInt8(65), 0x41); // level
   s.writeUInt8(g.readUInt8(66), 0x42); // job
-  s.writeUInt8(g.readUInt8(67), 0x43); // job2
-  s.writeUInt8(g.readUInt8(68), 0x44); // guild
-  s.writeUInt8(g.readUInt8(68), 0x46); // faction (name colour)
+  // job2 @0x43, job3 @0x44, job4 @0x45, faction @0x46 (same bytes as CHAR_ALL 0x37..0x3a, see ssjob.ts).
+  const jb = ssJobBytes.get(g.readUInt32LE(12)) ?? { job2: 0xff, job3: 0xff, job4: 0xff, faction: g.readUInt8(68) };
+  s.writeUInt8(jb.job2, 0x43);
+  s.writeUInt8(jb.job3, 0x44);
+  s.writeUInt8(jb.job4, 0x45);
+  s.writeUInt8(jb.faction, 0x46);
   // Avatar u32s keep the Game4 order (hair, faceUp, faceLow, hat, eye, armor, clothes, weapon, cape,
   // pet, toy), shifted from +76 to +0x50.
   g.copy(s, 0x50, 76, 120);

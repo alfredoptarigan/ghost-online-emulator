@@ -122,6 +122,7 @@ import {
 } from "./giftbox.js";
 import { storeBuy } from "./npcstore.js";
 import { loadPhantoms, phantomMuls, unsealItem } from "./phantom.js";
+import { refreshSsJob } from "./ssjob.js";
 import { ssAttr, ssMaxLevel, ssSkill, ssSkillClients, ssSkillCost, ssSkillHeal, ssSyncJobSkills } from "./ssskills.js";
 import { beltAbsorb, beltCheckWorn, beltDecay, beltExpMul, beltPacket, beltReset } from "./belt.js";
 import { expireSsBuffs, isSsBuffItem, loadSsBuffs, ssRecover, ssUse, ssUseVisual, startSsBuff } from "./ssuse.js";
@@ -2289,6 +2290,20 @@ async function runGmCommand(p: Player, cmdRaw: string): Promise<void> {
     console.log(
       `[field] GM //job2 char=${p.charId} job=${p.job} path=${path} -> ${job2ClassName(classId)} (id=${classId})`,
     );
+  } else if ((c0 === "//faction" || c0 === "//tier") && p.soulSaver) {
+    // Soul Saver test commands: //faction 1 Justice | 2 Chaos | 3 (jobs 6-10) | 0 none; //tier N = job tier
+    // (0-2 none, 3 2nd job lv60, 5 Rebirth, 6 2nd-Divine). Title bytes per ssjob.ts, stats per tb_JobGrowth.
+    const v = Math.max(0, Math.min(6, Math.floor(Number(parts[1] ?? 0)) || 0));
+    if (c0 === "//faction") {
+      p.job3 = v === 0 ? JOB_UNSET : Math.min(3, v);
+      await execute("UPDATE characters SET job3=? WHERE ID=?", [p.job3, p.charId]);
+    } else {
+      await execute("UPDATE characters SET ss_class=? WHERE ID=?", [v, p.charId]);
+    }
+    const jb = await refreshSsJob(p.charId);
+    await applySsStats(p);
+    await refreshCharView();
+    console.log(`[field] GM ${c0} (Soul Saver) char=${p.charId} job=${p.job} -> ${JSON.stringify(jb)}`);
   } else if (c0 === "//faction") {
     // //faction 1|2 — Order|Chaos; also sets matching 2nd-job title for current 1st job
     // //faction 0 clears faction + 2nd job title
@@ -2733,6 +2748,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       await recomputeSsStats(info.charId); // Soul Saver characters: stats from the client job tables
       if (p.soulSaver) await refreshSsWeapon(info.charId); // CHAR_ALL weapon speed/range (fan basic attack)
       await loadPhantoms(info.charId); // running Phantom bonuses; expired timed items are removed
+      if (p.soulSaver) await refreshSsJob(info.charId); // faction / job title bytes of CHAR_ALL and ENTERPLAYER
       const row = await loadCharRow(info.charId);
       if (!row) {
         console.log("[field] no character row", info.charId);
@@ -3581,11 +3597,13 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
         p.mexp = Number(row.mexp ?? p.mexp);
         p.money = Number(row.money ?? p.money);
         p.job = Number(row.job ?? p.job);
+        if (p.soulSaver) p.job3 = Number(row.job3 ?? p.job3); // faction quests 60/64
         p.hp = Number(row.chp ?? p.hp);
         p.mp = Number(row.cmp ?? p.mp);
         p.maxHp = Number(row.cmhp ?? p.maxHp);
         p.maxMp = Number(row.cmmp ?? p.maxMp);
       }
+      if (p.soulSaver) await refreshSsJob(p.charId);
       await applySsStats(p);
       if (p.level > levelBefore) {
         send(p, levelUpPacket(p.charId, p.level));

@@ -406,6 +406,10 @@ export async function completeQuest(cid: number, questId: number, ss = false): P
   const rewardPkts = await applyRewards(cid, questId, ss);
   if (ss && SS_JOB_CHANGE.has(questId)) await setSsClass(cid, 1);
   if (ss && SS_JOB2_CHANGE.has(questId)) await setSsClass(cid, 3);
+  // lv40 "Selecting Faction": 60 Justice (JusticeFactionReferral), 64 Chaos (ChaosFactionReferral).
+  if (ss && (questId === 60 || questId === 64)) {
+    await execute("UPDATE characters SET job3=? WHERE ID=?", [questId === 60 ? 1 : 2, cid]);
+  }
   return {
     // Soul Saver's 0x80 handler (FUN_01362410) stores +26 as the quest state, so 1 would re-open the quest
     // in the Quest Alert; send 2 (done).
