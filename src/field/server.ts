@@ -2646,6 +2646,11 @@ async function autoStat(p: Player): Promise<void> {
 /** tb_levelupevent (client Chart): item rewards on reaching levels 18, 36, 54, & (Soul Saver only). */
 type LevelUpEvent = { nLevel: number; nItemID: number; eInvenNo: number; nItemCount: number };
 let levelUpEvents: LevelUpEvent[] | null = null;
+/** item.itm rows still named in Korean, e.g. "[\uBBF8\uBC88\uC5ED]" (untranslated): not live on the English service. */
+function isUntranslated(name: string): boolean {
+  return name.startsWith("[") && name.endsWith("]") && /[^\x20-\x7e]/.test(name);
+}
+
 async function ssLevelUpRewards(p: Player, fromLevel: number, toLevel: number): Promise<void> {
   if (!p.soulSaver || toLevel <= fromLevel) return;
   if (!levelUpEvents) {
@@ -2662,7 +2667,7 @@ async function ssLevelUpRewards(p: Player, fromLevel: number, toLevel: number): 
   ).items ?? {};
   const gifts = levelUpEvents!
     .filter((e) => e.nLevel > fromLevel && e.nLevel <= toLevel)
-    .filter((e) => !/^[[^ -]+]$/.test(names[e.nItemID]?.n ?? ""))
+    .filter((e) => !isUntranslated(names[e.nItemID]?.n ?? ""))
     .map((e) => ({ itemId: e.nItemID, count: Math.max(1, e.nItemCount), tab: e.eInvenNo }));
   if (!gifts.length) return;
   console.log(`[field] level-up reward char=${p.charId} lv${fromLevel}->${toLevel} ${gifts.map((g) => g.itemId).join(",")}`);
