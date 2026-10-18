@@ -11,15 +11,15 @@
  *   FUN_013462c0 / FUN_012b3bf0 switch on the value)
  *
  * Client buff packets (Game.exe dump, dispatcher 0x016383CC; all handled by the skill manager 0x39CBFB8):
- * u16 value @0x0C, u32 seconds left @0x10, u32 item id @0x14 (the buff icon); value 0 and 0 seconds removes the icon.
+ * u16 value @0x0C, u32 time left in 1/40 s @0x10, u32 item id @0x14 (the buff icon), 28 B: value again @0x18;
+ * value 0 and time 0 removes the icon.
  *   0x52 max HP (28 B, FUN_01344c30)      0x53 max MP (28 B, FUN_01345020)     0x57 PATK % (28 B, FUN_013453a0)
  *   0x58 MATK % (28 B, FUN_01345600)      0x59 DEF (28 B, FUN_013459e0)        0x1fb PATK (28 B, FUN_013457c0)
  *   0x1fc MATK (28 B, FUN_013458d0)       0x26b HP % (24 B, FUN_01345ba0)      0x26c MP % (24 B, FUN_01345e90)
  *   0x54 attack speed / 0x55 movement / 0x56 leap (20 B, no item id: the client uses AzureSake 8840031,
  *   GoldenSake 8840051, ApricotSake 8840061; 0x55/0x56 read a byte @0x0C).
  * The group of each item comes from the remaining-time getter FUN_010aa110 (item id -> timer of the packet above);
- * type 39 items sit in the MATK % group. What the extra u32/u16 @0x18 of 0x53/0x57/0x58/0x1fb/0x1fc means is not
- * known (sent as 0). Attack and defense are applied by the client (it rolls the damage and sends 0x45/0x46); the
+ * type 39 items sit in the MATK % group. Attack and defense are applied by the client (it rolls the damage and sends 0x45/0x46); the
  * server does not raise its own max HP/MP for 5/6/35/36. The EXP/drop/gold buffs have no known icon packet.
  */
 import fs from "node:fs";
@@ -131,6 +131,12 @@ export function isSsBuffItem(itemId: number): boolean {
   return !!u && u.secs > 0 && group(u.type) !== null && (u.type !== 60 || !!COMBO[u.value]);
 }
 
+/**
+ * Official time unit is 1/40 s: GM Blessing (3600 s buff) sends 144000 and expires 3600 s later; after a relog it
+ * sends the remaining ticks (captures day1_stage1 / day2_stage2). The 28-byte packets repeat the value @0x18.
+ */
+const TICKS_PER_SEC = 40;
+
 export function buffPacket(type: number, value: number, secs: number, itemId: number): Buffer | null {
   const s = STAT[type];
   if (!s) return null;
@@ -138,9 +144,19 @@ export function buffPacket(type: number, value: number, secs: number, itemId: nu
   writeHeader(b, s.op, s.len);
   if (s.op === 0x55 || s.op === 0x56) b.writeUInt8(Math.min(255, Math.max(0, value)), 12);
   else b.writeUInt16LE(Math.min(0xffff, Math.max(0, value)), 12);
-  b.writeUInt32LE(Math.max(0, secs) >>> 0, 16);
+  b.writeUInt32LE((Math.max(0, secs) * TICKS_PER_SEC) >>> 0, 16);
   if (s.len >= 24) b.writeUInt32LE((s.item ?? itemId) >>> 0, 20);
+  if (s.len >= 28) b.writeUInt32LE(Math.max(0, value) >>> 0, 24);
   return b;
+}
+
+/** Group of the running buff a used item would replace, and its value (null when none is running). */
+export function runningSsBuff(charId: number, itemId: number): { value: number } | null {
+  const u = ssUse(itemId);
+  if (!u) return null;
+  const grp = group(u.type);
+  const b = (active.get(charId) ?? []).find((x) => x.grp === grp && x.until > nowSec());
+  return b ? { value: b.value } : null;
 }
 
 type Buff = { grp: number; itemId: number; type: number; value: number; until: number };

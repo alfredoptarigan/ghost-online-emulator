@@ -9,6 +9,7 @@
 import type { RowDataPacket } from "mysql2";
 import { query, execute } from "../db.js";
 import { ssBuffMuls } from "./ssuse.js";
+import { fortuneMuls } from "./ssservices.js";
 
 const PHANTOMS: Record<number, { exp?: number; drop?: number; gold?: number }> = {
   8990050: { drop: 1.5 }, // BluePhantom
@@ -63,7 +64,8 @@ export async function loadPhantoms(charId: number): Promise<void> {
 }
 
 /**
- * Current Phantom multipliers times the used EXP/drop/gold buff items (ssuse.ts); 1 when none is running.
+ * Current Phantom multipliers times the used EXP/drop/gold buff items (ssuse.ts) and today's Fortune Card
+ * (ssservices.ts); 1 when none is running.
  * An expired Phantom cache entry is refreshed in the background.
  */
 export function phantomMuls(charId: number): PhantomMuls {
@@ -74,7 +76,12 @@ export function phantomMuls(charId: number): PhantomMuls {
     active.delete(charId);
     void loadPhantoms(charId).catch(() => {});
   } else if (a) m = a.muls;
-  return { expMul: m.expMul * b.expMul, dropMul: m.dropMul * b.dropMul, goldMul: m.goldMul * b.goldMul };
+  const f = fortuneMuls(charId);
+  return {
+    expMul: m.expMul * b.expMul * f.expMul,
+    dropMul: m.dropMul * b.dropMul * f.dropMul,
+    goldMul: m.goldMul * b.goldMul * f.goldMul,
+  };
 }
 
 export type UnsealResult = { ok: true; bag: number; itemId: number } | { ok: false; reason: string };

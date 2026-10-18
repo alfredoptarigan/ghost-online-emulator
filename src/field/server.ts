@@ -154,6 +154,17 @@ import {
 } from "./ssavatar.js";
 import { WOT_REWARD_ITEM, sysMsgItemPacket, wotCheck, wotDue, wotExpired, wotNoteKill, wotStart } from "./ssantimacro.js";
 import {
+  FORTUNE_COST,
+  blessingListPacket,
+  compoundSpirit,
+  drawFortune,
+  fortuneResultPacket,
+  fortuneStatePacket,
+  handleBlessing,
+  loadFortune,
+  sysMsgPacket,
+} from "./ssservices.js";
+import {
   autoHuntMapPacket,
   autoHuntOf,
   autoHuntStatePacket,
@@ -2964,6 +2975,47 @@ async function giveGifts(p: Player, gifts: Gift[]): Promise<boolean> {
   return ok;
 }
 
+/** Soul Saver C 0x38C GM Blessing, C 0x271 spirit compound, C 0x802 Fortune Card of the Day (ssservices.ts). */
+async function handleSsService(p: Player, op: number, pkt: Buffer): Promise<void> {
+  const magic = p.magic || 0x0037;
+  if (op === 0x038c) {
+    for (const out of await handleBlessing(p.charId, pkt)) send(p, out);
+    return;
+  }
+  if (op === 0x0271) {
+    const r = await compoundSpirit(p.charId, pkt, p.money);
+    if (r.cost) {
+      p.money -= r.cost;
+      await execute("UPDATE characters SET money=? WHERE ID=?", [p.money, p.charId]);
+    }
+    send(p, sysMsgPacket(r.msg));
+    if (r.cost) send(p, moneyPacket(p.money, -r.cost));
+    for (const bag of r.bags) for (const out of await refreshBagPackets(p.charId, bag, magic)) send(p, out);
+    if (r.bags.length) {
+      await applySsStats(p);
+      send(p, await charAll(p.charId));
+    }
+    return;
+  }
+  // C 0x802: the client asked to pay 10,000 gold first (1033002) and refuses without it (1033013).
+  if (p.money < FORTUNE_COST) {
+    send(p, fortuneResultPacket(-1));
+    return;
+  }
+  const f = await drawFortune(p.charId);
+  if (f.result === 0) {
+    p.money -= FORTUNE_COST;
+    await execute("UPDATE characters SET money=? WHERE ID=?", [p.money, p.charId]);
+    send(p, fortuneStatePacket(true, rates.expEventRate * 100));
+    if (f.item) {
+      const bag = await addItemToInventory(p.charId, f.item.id, f.item.count, 0, -1, magic);
+      if (bag >= 0) for (const out of await refreshBagPackets(p.charId, bag, magic)) send(p, out);
+    }
+  }
+  send(p, fortuneResultPacket(f.result, f.card1, f.card2));
+  if (f.result === 0) send(p, moneyPacket(p.money, -FORTUNE_COST));
+}
+
 async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
   if (p.soulSaver) pkt = fromSoulSaver(pkt);
   const op = opcodeOf(pkt);
@@ -2982,6 +3034,10 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     `[field] pkt op=0x${op.toString(16)} len=${pkt.length} loggedIn=${p.loggedIn} char=${p.charId}`,
   );
   logPkt("IN", `field#${p.charId || "?"} op=${op.toString(16)}`, pkt);
+  if (p.soulSaver && (op === 0x038c || op === 0x0271 || op === 0x0802)) {
+    await handleSsService(p, op, pkt);
+    return;
+  }
 
   if (op === 0x0018) {
     // legacy: first 0x18 binds char + INIT; subsequent 0x18 sends CHAR_ALL/skills/map
@@ -3004,6 +3060,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
       await recomputeSsStats(info.charId); // Soul Saver characters: stats from the client job tables
       if (p.soulSaver) await refreshSsWeapon(info.charId); // CHAR_ALL weapon speed/range (fan basic attack)
       await loadPhantoms(info.charId); // running Phantom bonuses; expired timed items are removed
+      if (p.soulSaver) await loadFortune(info.charId); // today's Fortune Card bonus
       if (p.soulSaver) await refreshSsJob(info.charId); // faction / job title bytes of CHAR_ALL and ENTERPLAYER
       const row = await loadCharRow(info.charId);
       if (!row) {
@@ -3200,6 +3257,11 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     }
     p.fieldEntered = true;
     if (p.soulSaver) for (const out of await loadSsBuffs(p.charId)) send(p, out); // running item buff icons
+    if (p.soulSaver) {
+      // Official login copies: GM Blessing list (S 0x38D) and the rate / fortune state (S 0x1D4).
+      send(p, blessingListPacket());
+      send(p, fortuneStatePacket(!!(await loadFortune(p.charId)), rates.expEventRate * 100));
+    }
     for (const d of dropsOnMap(p.map, p.region)) send(p, buildDropSpawn(d, { settled: true }));
     for (const shop of listActivePShops(p.map, p.region)) {
       send(p, buildPShopStartPkt(shop.charId, shop.name, shop.kind));
