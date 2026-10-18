@@ -3754,7 +3754,9 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     const res = await skillPointUp(p.charId, type, slot);
     if (res.ok) {
       send(p, buildSkillLevelUpAck(res.skPoint, type, slot, res.level));
-      send(p, await buildSkillAll(p.charId));
+      // Official Soul Saver answers 0x74 with 0x75 + CHAR_ALL only; resending SKILL_ALL reset the skill window to the
+      // Common tab and broke its tabs.
+      if (!p.soulSaver) send(p, await buildSkillAll(p.charId));
       await applySsStats(p); // mastery passives (YinYangCharge ...) change the attack
       send(p, await charAll(p.charId));
       console.log(

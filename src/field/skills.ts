@@ -289,6 +289,7 @@ export function buildSkillLevelUpAck(skPoint: number, type: number, slot: number
   b.writeUInt8(type & 0xff, 14);
   b.writeUInt8(slot & 0xff, 15);
   b.writeUInt8(level & 0xff, 16);
+  b.writeUInt8(level & 0xff, 17); // second level copy (Soul Saver lv2 array; official 0x75 sends both)
   return b;
 }
 
