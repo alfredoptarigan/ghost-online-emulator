@@ -1,4 +1,4 @@
-import { beltExpMul } from "./belt.js";
+import { rewardExp } from "./belt.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { RowDataPacket } from "mysql2";
@@ -308,8 +308,9 @@ async function applySsRewards(cid: number, q: SsQuest, chosen = 0): Promise<Buff
   if (q.exp) {
     // Official: the worn belt doubles quest EXP too (DongkuaBelt +100 % up to lv30: quests at lv10-30 gave
     // 2.0-2.1 x the quest.luc EXP, at lv33+ 1.1 x / 1.0 x).
+    // EXP event x3/x4 (rates.expEventRate) on top of the belt, as the user asked.
     const lv = await query<RowDataPacket[]>("SELECT level FROM characters WHERE ID=?", [cid]);
-    await addExp(cid, Math.floor(q.exp * (await beltExpMul(cid, Number(lv[0]?.level ?? 1)))));
+    await addExp(cid, await rewardExp(cid, Number(lv[0]?.level ?? 1), q.exp, "quest"));
   }
   if (q.fame) await addFame(cid, q.fame);
   for (const [iid, n] of items) {
@@ -340,7 +341,7 @@ async function applyRewards(cid: number, questId: number, ss = false, chosen = 0
     3: 1, 4: 1, 5: 1, 6: 5, 8: 1, 9: 1, 11: 2, 12: 2,
   };
   if (money[questId]) await addMoney(cid, money[questId]!);
-  if (exp[questId]) await addExp(cid, exp[questId]!);
+  if (exp[questId]) await addExp(cid, await rewardExp(cid, 1, exp[questId]!, "quest", false));
   if (fame[questId]) await addFame(cid, fame[questId]!);
 
   if (questId === 7) {

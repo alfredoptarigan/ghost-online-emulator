@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { RowDataPacket } from "mysql2";
 import { query } from "../db.js";
-import { config } from "../config.js";
+import { config, rates } from "../config.js";
 
 const POINTS_PER_SPIRIT = 2;
 const BELT_SLOT = 22;
@@ -74,6 +74,18 @@ export async function beltExpMul(charId: number, level: number): Promise<number>
   const belt = beltItem(cur.itemId);
   if (!belt || level > belt.maxLevel) return 1;
   return 1 + belt.expPct / 100;
+}
+
+/**
+ * EXP of a reward (NPC quest, Quick Quest, Monster Encyclopedia) with the EXP event (rates.expEventRate, GM
+ * //expevent) and, unless belt is false, the worn belt bonus. Every reward EXP path goes through here.
+ */
+export async function rewardExp(charId: number, level: number, base: number, source: string, belt = true): Promise<number> {
+  const event = rates.expEventRate;
+  const beltMul = belt ? await beltExpMul(charId, level) : 1;
+  const exp = Math.max(0, Math.floor(base * event * beltMul));
+  console.log(`[exp] ${source} char=${charId} base=${base} event=x${event} belt=x${beltMul} -> ${exp}`);
+  return exp;
 }
 
 /** Drop the points (unequip, map change, logout). Returns true when there were any. */

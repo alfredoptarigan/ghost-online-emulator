@@ -127,7 +127,7 @@ import { loadPhantoms, phantomMuls, unsealItem } from "./phantom.js";
 import { refreshSsJob } from "./ssjob.js";
 import { learnSkill, learnResultPacket } from "./sslearn.js";
 import { ssAttr, ssMaxLevel, ssSkill, ssSkillClients, ssSkillCost, ssSkillHeal, ssSyncJobSkills } from "./ssskills.js";
-import { beltAbsorb, beltCheckWorn, beltDecay, beltExpMul, beltPacket, beltReset } from "./belt.js";
+import { beltAbsorb, beltCheckWorn, beltDecay, beltExpMul, beltPacket, beltReset, rewardExp } from "./belt.js";
 import { expireSsBuffs, isSsBuffItem, loadSsBuffs, ssRecover, ssUse, ssUseVisual, startSsBuff } from "./ssuse.js";
 import { ssPortal } from "./ssportal.js";
 import { recomputeSsStats, refreshSsWeapon, isSsChar, ssExpForLevel, SS_STAT_POINTS_PER_LEVEL, SS_SKILL_POINTS_PER_LEVEL } from "./ssstats.js";
@@ -3896,8 +3896,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     console.log(`[field] quick quest char=${p.charId} mode=${pkt.length > 12 ? pkt[12] : -1} quest=${r.questId} exp=${r.exp}`);
     if (r.exp > 0) {
       // Official: EXP event x3 and the gear EXP bonus apply to the reward like to kill EXP (LV_EXP 0x5B, then 0x35E).
-      const mul = rates.expEventRate * (await beltExpMul(p.charId, p.level));
-      await grantMonsterExp(p, Math.floor(r.exp * mul));
+      await grantMonsterExp(p, await rewardExp(p.charId, p.level, r.exp, "quickquest"));
     }
     for (const q of r.packets) send(p, q);
     return;
@@ -4056,7 +4055,8 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
           if (book.reward) {
             console.log(`[book] char=${p.charId} completed item=${itemId} exp+${book.reward.exp} fame+${book.reward.fame}`);
             await execute("UPDATE characters SET honor=honor+? WHERE ID=?", [book.reward.fame, p.charId]);
-            const leveled = await grantMonsterExp(p, book.reward.exp);
+            // Official does not apply the EXP event here (t=5341 during x3: 150 x 766), the user wants it anyway.
+            const leveled = await grantMonsterExp(p, await rewardExp(p.charId, p.level, book.reward.exp, "book", false));
             if (!leveled) send(p, await charAll(p.charId)); // reputation is part of CHAR_ALL
           }
         } else {
