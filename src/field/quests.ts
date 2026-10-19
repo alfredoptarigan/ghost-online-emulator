@@ -366,11 +366,25 @@ async function applyRewards(cid: number, questId: number, ss = false, chosen = 0
   return out;
 }
 
+/** lv40 "Selecting Faction": 60 Justice (Haran 4314021), 64 Chaos (4314020). quest.luc has no reward for either, so the
+ * faction (characters.job3 1 Justice / 2 Chaos) is set here, and choosing one closes the other. */
+const FACTION_QUESTS: Record<number, number> = { 60: 1, 64: 2 };
+
+/** True when the character can no longer take/finish a faction quest: it has a faction, or finished the other one. */
+async function factionClosed(cid: number, questId: number): Promise<boolean> {
+  const rows = await query<RowDataPacket[]>("SELECT job3 FROM characters WHERE ID=?", [cid]);
+  const job3 = Number(rows[0]?.job3 ?? -1);
+  if (job3 >= 1 && job3 <= 3) return true;
+  const other = await getRow(cid, questId === 60 ? 64 : 60);
+  return !!other && Number(other.questState) === 0x32;
+}
+
 export async function acceptQuest(cid: number, level: number, questId: number, ss = false): Promise<Buffer[]> {
   if (!supported(questId)) return [await buildQuestAll(cid, ss)];
   const legacy = useLegacy(questId, ss);
   const needLv = (legacy ? NEED_LEVEL[questId] : SS_QUESTS[questId]!.needLevel) ?? 1;
   if (level < needLv) return [await buildQuestAll(cid, ss)];
+  if (ss && FACTION_QUESTS[questId] && (await factionClosed(cid, questId))) return [await buildQuestAll(cid, ss)];
   const needQ = legacy ? NEED_QUEST[questId] : SS_QUESTS[questId]!.needQuest;
   if (needQ) {
     const prereq = await getRow(cid, needQ);
@@ -413,13 +427,23 @@ export async function completeQuest(cid: number, questId: number, ss = false, ch
   if (!row || Number(row.questState) !== 0x31 || !supported(questId)) {
     return { packets: [await buildQuestAll(cid, ss)], refreshChar: false };
   }
+  const faction = ss ? FACTION_QUESTS[questId] : undefined;
+  if (faction && (await factionClosed(cid, questId))) return { packets: [await buildQuestAll(cid, ss)], refreshChar: false };
   await execute("UPDATE quests SET state=50 WHERE charid=? AND questid=?", [cid, questId]);
   const rewardPkts = await applyRewards(cid, questId, ss, chosen);
   if (ss && SS_JOB_CHANGE.has(questId)) await setSsClass(cid, 1);
   if (ss && SS_JOB2_CHANGE.has(questId)) await setSsClass(cid, 3);
-  // lv40 "Selecting Faction": 60 Justice (JusticeFactionReferral), 64 Chaos (ChaosFactionReferral).
-  if (ss && (questId === 60 || questId === 64)) {
-    await execute("UPDATE characters SET job3=? WHERE ID=?", [questId === 60 ? 1 : 2, cid]);
+  if (faction) {
+    await execute("UPDATE characters SET job3=? WHERE ID=?", [faction, cid]);
+    // The other faction quest is closed: drop it if it was taken too.
+    await execute("DELETE FROM quests WHERE charid=? AND questid=? AND state=49", [cid, questId === 60 ? 64 : 60]);
+    // Mamluk order (private_test3 t=3667): S 0x80, bag, 0x79, then CHAR_ALL / SKILL_ALL (server.ts). Their client
+    // crashed right after S 0x7F8 (FACT_BECOME_CHAOSFACTMEMBER) sent to the new Justice member, and they also re-sent
+    // the own ENTERPLAYER 0x1E; neither is sent here (GM //enterself tests 0x1E on its own).
+    return {
+      packets: [questUpdate(Number(row.completeMonster), questId, 2, 0), ...rewardPkts, await buildQuestAll(cid, ss)],
+      refreshChar: true,
+    };
   }
   return {
     // Soul Saver's 0x80 handler (FUN_01362410) stores +26 as the quest state, so 1 would re-open the quest

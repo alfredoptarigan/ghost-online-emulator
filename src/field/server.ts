@@ -110,6 +110,7 @@ import {
 import { handleQuestPacket, onMonsterKill, buildQuestAll } from "./quests.js";
 import { handleQuickQuest, quickQuestLoginPackets, quickQuestLogout, quickQuestOnKill } from "./ssquickquest.js";
 import { buildMonsterBook, registerPiece } from "./monsterbook.js";
+import { couponCode, couponInvalid, redeemCoupon } from "./sscoupon.js";
 import {
   NOVICE_GIFT,
   claimNoviceGift,
@@ -2405,6 +2406,10 @@ async function runGmCommand(p: Player, cmdRaw: string): Promise<void> {
     console.log(
       `[field] GM //faction char=${p.charId} job=${p.job} -> ${job2ClassName(p.job2)} faction=${path}`,
     );
+  } else if (c0 === "//enterself" && p.soulSaver) {
+    // Test only the own ENTERPLAYER 0x1E that Mamluk re-sent after the faction quest (crash suspect, RE notes 23).
+    send(p, await enterPlayer(p.charId, { x: p.x, y: p.y, map: p.map, region: p.region, petUseSlot: p.petUseSlot }));
+    console.log(`[field] GM //enterself char=${p.charId} job3=${p.job3}`);
   } else if (c0 === "//skills" && p.soulSaver) {
     // Soul Saver: all skills of the job (skill.skl owner job) and of the faction in job3 (1 Justice, 2 Chaos, 3).
     const faction = p.job3 >= 1 && p.job3 <= 3 ? p.job3 : 0;
@@ -4163,6 +4168,16 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
   // Soul Saver Novice Gift (Aeri Elder "Challenge! Receive Gift"): C 0x1D9 u32 2 ’ item 8846411 once per character.
   if (op === 0x01d9 && p.soulSaver) {
     if (await claimNoviceGift(p.charId)) await giveGifts(p, [{ itemId: NOVICE_GIFT, count: 1, tab: 3 }]);
+    return;
+  }
+
+  // Soul Saver coupon (NPC Security Consultant): C 0x1D7 code @12 -> S 0xF3 + 0xF2 (cash), or S 0x1D8 invalid/used.
+  if (op === 0x01d7 && p.soulSaver) {
+    const code = couponCode(pkt);
+    const cash = await redeemCoupon(p.accountId, code);
+    console.log(`[coupon] account=${p.accountId} char=${p.charId} code=${JSON.stringify(code)} cash=${cash}`);
+    if (cash > 0) for (const b of await buildBalance(p.accountId)) send(p, b);
+    else send(p, couponInvalid());
     return;
   }
 
