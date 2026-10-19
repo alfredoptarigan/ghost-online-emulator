@@ -11,8 +11,10 @@ export function bufToHex(buf: Buffer): string {
 
 export function logPkt(dir: "IN" | "OUT", tag: string, buf: Buffer): void {
   if (!config.pktLog) return;
-  const preview = bufToHex(buf.subarray(0, Math.min(buf.length, 64)));
-  console.log(`[pkt ${dir}] ${tag} len=${buf.length} ${preview}${buf.length > 64 ? "..." : ""}`);
+  // PKT_LOG_FULL=1 logs whole packets (up to 4 KB) for byte-by-byte diffs against captures.
+  const max = process.env.PKT_LOG_FULL === "1" ? 4096 : 64;
+  const preview = bufToHex(buf.subarray(0, Math.min(buf.length, max)));
+  console.log(`[pkt ${dir}] ${tag} len=${buf.length} ${preview}${buf.length > max ? "..." : ""}`);
 }
 
 /** Login framing: AA 55 | u16le len | payload | 55 AA */
