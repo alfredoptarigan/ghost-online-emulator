@@ -40,6 +40,8 @@ const CAT_NAMES = [
 
 const byCat: CashItem[][] = Array.from({ length: 20 }, () => []);
 let catalog: CashItem[] = [];
+/** Items filterClientItems drops for the Ghost en-client; the Soul Saver lists still offer them. */
+const ssOnlyByCat: CashItem[][] = Array.from({ length: 20 }, () => []);
 
 function pushItem(cat: number, item: Omit<CashItem, "category">, seen: Set<number>): void {
   if (cat < 0 || cat > 19) return;
@@ -129,6 +131,7 @@ function filterClientItems(): void {
   let removed = 0;
   for (let c = 0; c < byCat.length; c++) {
     const before = byCat[c]!.length;
+    const all = byCat[c]!;
     if (c === 15) {
       byCat[c] = byCat[c]!.filter((it) => {
         if (!isCompanionPetId(it.itemId)) return false;
@@ -141,6 +144,8 @@ function filterClientItems(): void {
       byCat[c] = byCat[c]!.filter((it) => itmIds.has(it.itemId));
     }
     removed += before - byCat[c]!.length;
+    const kept = new Set(byCat[c]);
+    ssOnlyByCat[c] = all.filter((it) => !kept.has(it));
   }
   catalog = byCat.flat();
   if (removed > 0) {
@@ -303,6 +308,7 @@ function finalizeCashCatalog(): void {
 export async function loadCashShopFromDb(): Promise<void> {
   catalog = [];
   for (let i = 0; i < 20; i++) byCat[i] = [];
+  for (let i = 0; i < 20; i++) ssOnlyByCat[i] = [];
   const seen = new Map<number, Set<number>>();
   let fromDb = 0;
 
@@ -444,8 +450,120 @@ export async function buildWarehouse(charId: number): Promise<Buffer> {
   return b;
 }
 
-export async function cashBuy(accountId: number, charId: number, itemId: number): Promise<boolean> {
-  const item = catalog.find((c) => c.itemId === itemId);
+/** Soul Saver cash storage 0xE6 slots (client ctor FUN_011646c0 loops 0x50). Ghost en-client has 20. */
+export const SS_CASH_SLOTS = 80;
+
+/**
+ * Soul Saver cash storage S 0xE6 (5056 B, ctor FUN_011646c0, parser FUN_01165c40). Per slot i:
+ * itemId u32 @0x0C+4i, flag bytes @0x14C+i / @0x69C+i / @0x6EC+i, 10 B @0x19C+10i, term u32 @0x4BC+4i
+ * (guess: 0 for every permanent item in the private_test2 capture), amount u16 @0x5FC+2i, 20 B @0x73C+20i
+ * (last byte 1); u16 1 @0xD7C. Bytes set to match the capture; their meaning is not known.
+ */
+export async function buildSsWarehouse(charId: number): Promise<Buffer> {
+  const rows = await query<RowDataPacket[]>(
+    "SELECT slot, itemid, amount, term FROM cash_inven WHERE charid = ? ORDER BY slot",
+    [charId],
+  );
+  const b = Buffer.alloc(0x13c0, 0);
+  writeHeader(b, 0x00e6, 0x13c0);
+  for (const r of rows) {
+    const s = Number(r.slot);
+    if (s < 0 || s >= SS_CASH_SLOTS) continue;
+    b.writeUInt32LE(Number(r.itemid), 0x0c + s * 4);
+    b[0x14c + s] = 1;
+    const term = Number(r.term ?? -1);
+    b.writeInt32LE(term > 0 ? term : 0, 0x4bc + s * 4);
+    b.writeUInt16LE(Number(r.amount ?? 1), 0x5fc + s * 2);
+    b[0x69c + s] = 1;
+    b[0x6ec + s] = 1;
+    b[0x73c + s * 20 + 19] = 1;
+  }
+  b.writeUInt16LE(1, 0xd7c);
+  return b;
+}
+
+/**
+ * Soul Saver catalog lists S 0x11C.. (Game.exe field dispatcher memcpy sizes; layout from the private
+ * server capture, SOULSAVER_RE_NOTES §23). 32 B entries from @12, entry = sub*300 + idx: itemId u32,
+ * qty u32, price u32, duration i32 (-1 permanent), price2 u32, u32 0, flag bytes @24/@25. Empty
+ * entries keep qty 1 and duration -1 like the capture. Each sub lists the emulator categories shown
+ * there (same item kinds as the captured mall). 0x122 is ignored by the client; 0x124..0x128 (stride
+ * 48) and 0x129..0x12B were empty or duplicates there, so they are not sent.
+ */
+const SS_LISTS: { op: number; size: number; subs: number[][] }[] = [
+  { op: 0x11c, size: 38412, subs: [[0], [1], [2], [3]] }, // eyes M/F, hair M/F
+  { op: 0x11d, size: 38412, subs: [[4], [5], [6], []] }, // face, beard/tattoo, hat, (ears)
+  { op: 0x11e, size: 57612, subs: [[7], [8], [9], [], [], []] }, // dress M/F, back, (tools, gems, weapons)
+  { op: 0x11f, size: 64012, subs: [[12, 14, 10, 19], [], [11, 13]] }, // consumables, (potions), shop/trails
+  { op: 0x120, size: 38412, subs: [[15], [16], [17], []] }, // pets, pet equipment, pet consumables
+  { op: 0x121, size: 38412, subs: [[18], []] }, // guard (sculptures)
+  { op: 0x123, size: 9612, subs: [[]] },
+];
+
+type SsTables = { items: Record<string, unknown>; pets: Record<string, unknown> };
+let ssTables: SsTables | null = null;
+
+/** Item ids the Soul Saver client knows (ss_items.json / ss_pets.json); others show as blank slots. */
+function ssKnows(itemId: number): boolean {
+  ssTables ??= (() => {
+    const load = (f: string, key: string): Record<string, unknown> => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(config.dataDir, f), "utf8"))[key] ?? {};
+      } catch {
+        return {};
+      }
+    };
+    return { items: load("ss_items.json", "items"), pets: load("ss_pets.json", "pets") };
+  })();
+  return itemId in ssTables.items || itemId in ssTables.pets;
+}
+
+/** @24 / @25 flags as the captured mall sets them: wearables 01 01, pets 01 00, consumables 00 00. */
+function ssEntryFlags(cat: number): [number, number] {
+  if (cat <= 9) return [1, 1];
+  if (cat === 15 || cat === 16) return [1, 0];
+  return [0, 0];
+}
+
+export function buildSsCashLists(): Buffer[] {
+  return SS_LISTS.map(({ op, size, subs }) => {
+    const buf = Buffer.alloc(size, 0);
+    writeHeader(buf, op, size, 0x0105, 0);
+    const entries = (size - 12) / 32;
+    for (let i = 0; i < entries; i++) {
+      buf.writeUInt32LE(1, 12 + i * 32 + 4);
+      buf.writeInt32LE(-1, 12 + i * 32 + 12);
+    }
+    subs.forEach((cats, sub) => {
+      const items = cats.flatMap((c) => [...byCat[c]!, ...ssOnlyByCat[c]!]).filter((it) => ssKnows(it.itemId));
+      items.slice(0, 300).forEach((it, idx) => {
+        const o = 12 + (sub * 300 + idx) * 32;
+        if (o + 32 > size) return;
+        buf.writeUInt32LE(it.itemId, o);
+        buf.writeUInt32LE(cashAmount(it.itemId), o + 4);
+        buf.writeUInt32LE(it.bargain, o + 8);
+        buf.writeInt32LE(it.term, o + 12);
+        buf.writeUInt32LE(it.bargain, o + 16);
+        [buf[o + 24], buf[o + 25]] = ssEntryFlags(it.category);
+      });
+    });
+    return buf;
+  });
+}
+
+/** Stack size delivered per purchase. */
+function cashAmount(itemId: number): number {
+  if (itemId === 8842002) return 10;
+  if (itemId >= 8841001 && itemId <= 8841005) return 20;
+  if (itemId === 8890031 || itemId === 8890037) return 100;
+  return 1;
+}
+
+export async function cashBuy(accountId: number, charId: number, itemId: number, soulSaver = false): Promise<boolean> {
+  const item =
+    catalog.find((c) => c.itemId === itemId) ??
+    (soulSaver ? ssOnlyByCat.flat().find((c) => c.itemId === itemId) : undefined);
+  const maxSlots = soulSaver ? SS_CASH_SLOTS : 20;
   if (!item) return false;
   const rows = await query<RowDataPacket[]>("SELECT game_points FROM users WHERE accountid = ?", [accountId]);
   const gp = Number(rows[0]?.game_points ?? 0);
@@ -453,14 +571,9 @@ export async function cashBuy(accountId: number, charId: number, itemId: number)
   const used = await query<RowDataPacket[]>("SELECT slot FROM cash_inven WHERE charid = ?", [charId]);
   const usedSlots = new Set(used.map((r) => Number(r.slot)));
   let slot = -1;
-  for (let i = 0; i < 20; i++) if (!usedSlots.has(i)) { slot = i; break; }
+  for (let i = 0; i < maxSlots; i++) if (!usedSlots.has(i)) { slot = i; break; }
   if (slot < 0) return false;
-  let amount = 1;
-  if (itemId === 8842002) amount = 10;
-  if (itemId >= 8841001 && itemId <= 8841005) amount = 20;
-  if (itemId === 8890031 || itemId === 8890037) amount = 100;
-  if (itemId === 8890044 || itemId === 8890101 || itemId === 8890050) amount = 1;
-  if (itemId === 8890112 || itemId === 8890200) amount = 1;
+  const amount = cashAmount(itemId);
   // All mall purchases arrive sealed (IsLocked=1) — tradeable until 0x140 unseal.
   const locked = 1;
   await execute("UPDATE users SET game_points = game_points - ? WHERE accountid = ?", [item.bargain, accountId]);

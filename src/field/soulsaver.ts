@@ -676,11 +676,12 @@ const converters: Record<number, { len: number; fn: (g: Buffer, charId: number) 
 };
 
 /**
- * Game4 packets whose Soul Saver layout differs and is not mapped yet; sending them would be parsed as
- * garbage. Cash lists 0x11F (64012 B), 0x120/0x121 (38412 B), 0x123..0x127 (58800 B blocks; 0x122 is
- * ignored by the client) and warehouse 0xE6 (5056 B).
+ * Game4 cash lists and warehouse 0xE6 have a different Soul Saver layout; sending them would be parsed
+ * as garbage. The Soul Saver versions are built directly (cashshop.ts buildSsCashLists /
+ * buildSsWarehouse) and pass through when they have the Soul Saver size listed here.
  */
 const unmapped = new Set([0x11f, 0x120, 0x121, 0x122, 0x123, 0x124, 0x125, 0x126, 0x127, 0xe6]);
+const ssSize: Record<number, number> = { 0x11f: 64012, 0x120: 38412, 0x121: 38412, 0x123: 9612, 0xe6: 0x13c0 };
 
 /**
  * Convert a Game4-layout field packet to Soul Saver layout (header length fixed by the caller).
@@ -689,7 +690,7 @@ const unmapped = new Set([0x11f, 0x120, 0x121, 0x122, 0x123, 0x124, 0x125, 0x126
 export function toSoulSaver(buf: Buffer, charId: number): Buffer | null {
   if (buf.length < 12) return buf;
   const op = buf.readUInt16LE(2);
-  if (unmapped.has(op)) return null;
+  if (unmapped.has(op)) return buf.length === ssSize[op] ? buf : null;
   const en = enToGame4[op];
   if (en && buf.length === en.len) buf = en.fn(buf);
   const c = converters[op];

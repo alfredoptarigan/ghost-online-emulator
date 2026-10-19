@@ -74,6 +74,9 @@ import {
   cashSlotsForMagic,
   buildBalance,
   buildWarehouse,
+  buildSsWarehouse,
+  buildSsCashLists,
+  SS_CASH_SLOTS,
   cashBuy,
   deliverCashGifts,
 } from "./cashshop.js";
@@ -390,7 +393,7 @@ function send(p: Player, buf: Buffer): void {
     out.writeUInt16LE(p.magic & 0xffff, 0);
     out.writeUInt16LE((op + len + p.magic) & 0xffff, 6);
     // Cash list templates + personal shop (legacy _CashShopWriteHeader) need unk=0.
-    if ((op >= 0x11f && op <= 0x127) || isPShopOutOpcode(op)) {
+    if ((op >= 0x11f && op <= 0x127) || (p.soulSaver && op >= 0x11c && op <= 0x12b) || isPShopOutOpcode(op)) {
       out.writeUInt32LE(0, 8);
     } else {
       out.writeUInt32LE(p.unk >>> 0, 8);
@@ -867,14 +870,14 @@ async function sendCashMall(p: Player): Promise<void> {
   send(p, await buildEquip2(p.charId, magic));
   send(p, await buildSetAvatar(p.charId));
   const slots = cashSlotsForMagic(p.magic || 0x0037);
-  const lists = buildCashLists(slots);
+  const lists = p.soulSaver ? buildSsCashLists() : buildCashLists(slots);
   for (const c of lists) send(p, c);
   console.log(
     `[cashshop] sent lists char=${p.charId} slotsPer=${slots} magic=0x${(p.magic || 0).toString(16)} sizes=${lists.map((b) => b.length).join(",")}`,
   );
   for (const b of await buildBalance(p.accountId)) send(p, b);
   await deliverCashGifts(p.charId, p.name);
-  send(p, await buildWarehouse(p.charId));
+  send(p, await cashWarehouse(p));
 }
 
 /** Catalog only — must be sent BEFORE ENTERPLAYER on map 77 so UI sync sees filled lists. */
@@ -885,7 +888,7 @@ async function sendCashCatalog(p: Player): Promise<void> {
   send(p, await buildEquip2(p.charId, magic));
   if (p.magic === 0x0037) send(p, await buildSetAvatar(p.charId));
   const slots = cashSlotsForMagic(p.magic || 0x0037);
-  const lists = buildCashLists(slots);
+  const lists = p.soulSaver ? buildSsCashLists() : buildCashLists(slots);
   for (const c of lists) send(p, c);
   console.log(
     `[cashshop] catalog char=${p.charId} slotsPer=${slots} magic=0x${(p.magic || 0).toString(16)} sizes=${lists.map((b) => b.length).join(",")}`,
@@ -895,7 +898,12 @@ async function sendCashCatalog(p: Player): Promise<void> {
 async function sendCashBalanceAndWarehouse(p: Player): Promise<void> {
   for (const b of await buildBalance(p.accountId)) send(p, b);
   await deliverCashGifts(p.charId, p.name);
-  send(p, await buildWarehouse(p.charId));
+  send(p, await cashWarehouse(p));
+}
+
+/** Cash storage 0xE6 in the client's layout (Soul Saver: 80 slots, 5056 B). */
+function cashWarehouse(p: Player): Promise<Buffer> {
+  return p.soulSaver ? buildSsWarehouse(p.charId) : buildWarehouse(p.charId);
 }
 
 function isCashMall(map: number, region: number): boolean {
@@ -3669,18 +3677,20 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
   }
   if (op === 0x00e5) {
     for (const b of await buildBalance(p.accountId)) send(p, b);
-    send(p, await buildWarehouse(p.charId));
+    send(p, await cashWarehouse(p));
     return;
   }
   if (op === 0x00e7) {
+    // Soul Saver (60 B): itemId @12, u16 tab/sub/idx @16/@18/@20, item name @24; the item is found by id.
     const itemId = pkt.readUInt32LE(12);
-    const ok = await cashBuy(p.accountId, p.charId, itemId);
+    const ok = await cashBuy(p.accountId, p.charId, itemId, p.soulSaver);
+    if (p.soulSaver) console.log(`[cashshop] buy char=${p.charId} item=${itemId} ok=${ok}`);
     const ack = Buffer.alloc(16, 0);
     writeHeader(ack, 0x00e8, 16);
     ack.writeUInt32LE(ok ? 1 : 0, 12);
     send(p, ack);
     for (const b of await buildBalance(p.accountId)) send(p, b);
-    send(p, await buildWarehouse(p.charId));
+    send(p, await cashWarehouse(p));
     return;
   }
   if (op === 0x00e9) {
@@ -3704,7 +3714,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
   if (op === 0x00ef) {
     // cash warehouse -> invent: slot at +12
     const slot = pkt.readUInt32LE(12);
-    if (slot > 19) return;
+    if (slot >= (p.soulSaver ? SS_CASH_SLOTS : 20)) return;
     const rows = await query<RowDataPacket[]>("SELECT * FROM cash_inven WHERE charid=? AND slot=?", [p.charId, slot]);
     if (!rows.length) return;
     const r = rows[0];
@@ -3714,7 +3724,8 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     const term = Number(r.term ?? -1);
     const group = Math.floor(itemId / 100000);
     let bag = -1;
-    if (group === 90) {
+    // Soul Saver puts hair/eyes in the bag like other items (private server capture); Ghost wears them at once.
+    if (group === 90 && !p.soulSaver) {
       // hair → worn 7
       await execute("DELETE FROM equip WHERE charid=? AND pos1=0 AND pos2=7", [p.charId]);
       const m = await query<RowDataPacket[]>("SELECT COALESCE(MAX(equipid),0) AS m FROM equip");
@@ -3723,7 +3734,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
         [Number(m[0]?.m ?? 0) + 1, itemId, p.charId, locked, term],
       );
       bag = 0;
-    } else if (group === 91) {
+    } else if (group === 91 && !p.soulSaver) {
       await execute("DELETE FROM equip WHERE charid=? AND pos1=0 AND pos2=8", [p.charId]);
       const m = await query<RowDataPacket[]>("SELECT COALESCE(MAX(equipid),0) AS m FROM equip");
       await execute(
@@ -3742,7 +3753,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     writeHeader(ack, 0x00f0, 16);
     ack.writeUInt32LE(1, 12);
     send(p, ack);
-    send(p, await buildWarehouse(p.charId));
+    send(p, await cashWarehouse(p));
     for (const out of await refreshBagPackets(p.charId, bag, p.magic || 0x0037)) send(p, out);
     if (bag === 0) {
       const av = await buildSetAvatar(p.charId);
@@ -3767,7 +3778,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     console.log(`[cashshop] 0x140 unseal char=${p.charId} type=${type} slot=${slot}`);
     const res = await dismantle(p.charId, type, slot, p.magic || 0x0037);
     for (const out of res.packets) send(p, out);
-    if (res.warehouse) send(p, await buildWarehouse(p.charId));
+    if (res.warehouse) send(p, await cashWarehouse(p));
     return;
   }
 
