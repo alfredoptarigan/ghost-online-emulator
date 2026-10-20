@@ -232,7 +232,7 @@ function ssServerListPacket(): Buffer {
 /**
  * 0x3B -> 0x3C: two server ip/port string pairs (official ports 15011 / 15111).
  * The client sends "INET <key> <user> ..." (op 0x08) to the first pair: that is the channel
- * (character select) server. The second pair is presumably the messenger.
+ * (character select) server. The second pair is the Sect (messenger) server, AA55 protocol.
  */
 function ssServerAddrPacket(): Buffer {
   return frameAA55(
@@ -241,7 +241,7 @@ function ssServerAddrPacket(): Buffer {
       ssString("127.0.0.1"),
       ssString(String(config.channelPort)),
       ssString("127.0.0.1"),
-      ssString(String(config.messengerPort)),
+      ssString(String(config.ssMessengerPort)),
     ]),
   );
 }

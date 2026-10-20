@@ -3,7 +3,7 @@ import { config } from "./config.js";
 import { startLoginServer } from "./login/server.js";
 import { startChannelServer } from "./channel/server.js";
 import { startFieldServer } from "./field/server.js";
-import { startMessengerStub } from "./messenger/stub.js";
+import { startMessengerStub, startSsMessengerStub } from "./messenger/stub.js";
 
 async function main(): Promise<void> {
   console.log("Ghost Online Node Server");
@@ -14,6 +14,7 @@ async function main(): Promise<void> {
   startMessengerStub(
     [...new Set([config.messengerPort, config.messengerPortAlt].filter((p) => p > 0))],
   );
+  if (config.ssMessengerPort > 0) startSsMessengerStub(config.ssMessengerPort);
   console.log(
     `All services up → ${config.loginHost}:${config.loginPort}`,
   );

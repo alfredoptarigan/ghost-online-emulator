@@ -4,6 +4,7 @@ import net from "node:net";
 import type { RowDataPacket } from "mysql2";
 import { peelGame, writeHeader, writeCString, readCString } from "../net/packet.js";
 import { query, execute } from "../db.js";
+import { startSoulSaverMessenger } from "./soulsaver.js";
 
 /**
  * Messenger — EN client dials 127.0.0.1:17201.
@@ -702,6 +703,11 @@ function attachClient(sock: net.Socket, tag: string): void {
     unregisterSession(session);
     sessions.delete(sock);
   });
+}
+
+/** Soul Saver Sect server on its own port (both protocols have the server speak first). */
+export function startSsMessengerStub(port: number): net.Server {
+  return startSoulSaverMessenger(port, mlog);
 }
 
 export function startMessengerStub(ports: number | number[] = [17201, 13070]): net.Server[] {

@@ -122,6 +122,8 @@ export const config = {
   messengerPort: num(process.env.MESSENGER_PORT, 17201),
   /** Extra messenger port (Game4 classic 13070). */
   messengerPortAlt: num(process.env.MESSENGER_PORT_ALT, 13070),
+  /** Soul Saver Sect server (official 15111): AA55 framing, see messenger/soulsaver.ts. */
+  ssMessengerPort: num(process.env.SS_MESSENGER_PORT, 15111),
   pktLog: process.env.PKT_LOG === "1",
   /** Game data root (drops, prices, cash shop, map_pexels, client assets). */
   dataDir: path.resolve(rootDir, process.env.DATA_DIR ?? "data"),
