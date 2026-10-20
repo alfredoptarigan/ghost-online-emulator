@@ -319,6 +319,32 @@ const JAR_SKILL_BASE: Record<number, number> = {
   8843901: 3010, 8843902: 3020, 8843912: 3020, 8843903: 3030, 8843913: 3030,
 };
 export const SS_START_JARS = [8843801, 8843901];
+
+/**
+ * Avatar weapon: worn slot 17 (item.itm "Amulet", s 1, f[22] = 17). Official new characters wear SpiritAmulet
+ * 8000011 there from lv1 (0x64 at login, capture day1_stage1; Mamluk too), later EyeSlime 8000201, ZodiacPig 8000301.
+ * The client needs it in avatar mode: the skill cast check (FUN_013dc3b0 @0x13dc83c) refuses every avatar skill while
+ * slot 17 (0x39CDC48) is empty, the avatar basic attack reads it, and the Character window shows Attack "0"
+ * (@0x1075847). Returns true when it was added.
+ */
+export const SS_START_AMULET = 8000011;
+export const SS_AMULET_SLOT = 17;
+
+export async function grantSsAvatarAmulet(charId: number): Promise<boolean> {
+  const worn = await query<RowDataPacket[]>("SELECT equipid FROM equip WHERE charid=? AND pos1=0 AND pos2=?", [
+    charId,
+    SS_AMULET_SLOT,
+  ]);
+  if (worn.length) return false;
+  const m = await query<RowDataPacket[]>("SELECT COALESCE(MAX(equipid),0) AS m FROM equip");
+  await execute("INSERT INTO equip (equipid, type, charid, pos1, pos2) VALUES (?,?,?,0,?)", [
+    Number(m[0]?.m ?? 0) + 1,
+    SS_START_AMULET,
+    charId,
+    SS_AMULET_SLOT,
+  ]);
+  return true;
+}
 const JAR_TICK_MS = 300_000;
 
 export function isAvatarJar(itemId: number): boolean {

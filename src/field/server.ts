@@ -153,6 +153,7 @@ import {
   charsWithJars,
   equipJar,
   grantStartJars,
+  grantSsAvatarAmulet,
   isAvatarJar,
   registerJar,
   avatarLeave,
@@ -3246,6 +3247,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     if (p.soulSaver) {
       await grantStartJars(p.charId, p.level); // characters already past lv10 before jars existed here
       await grantSsAvatarWeapon(p.charId, p.level);
+      if (await grantSsAvatarAmulet(p.charId)) console.log(`[field] avatar amulet given char=${p.charId}`);
       send(p, avatarJarsPacket(p.charId, p.level)); // S 0x265 avatar jar list ("Avatar Spirit" window)
     }
     send(p, await buildSkillAll(p.charId));
@@ -4231,7 +4233,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     return;
   }
 
-  // Soul Saver Novice Gift (Aeri Elder "Challenge! Receive Gift"): C 0x1D9 u32 2 ï¿½ item 8846411 once per character.
+  // Soul Saver Novice Gift (Aeri Elder "Challenge! Receive Gift"): C 0x1D9 u32 2 ’ item 8846411 once per character.
   if (op === 0x01d9 && p.soulSaver) {
     if (await claimNoviceGift(p.charId)) await giveGifts(p, [{ itemId: NOVICE_GIFT, count: 1, tab: 3 }]);
     return;
@@ -4247,7 +4249,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     return;
   }
 
-  // Soul Saver select box choice: spend slot u32 @12, choice index u32 @16, chosen item u32 @20 ï¿½ S 0x2ED.
+  // Soul Saver select box choice: spend slot u32 @12, choice index u32 @16, chosen item u32 @20 ’ S 0x2ED.
   if (op === 0x02ef && p.soulSaver && pkt.length >= 24) {
     const slot = pkt.readUInt32LE(12);
     const chosen = pkt.readUInt32LE(20);
@@ -4266,7 +4268,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     return;
   }
 
-  // Soul Saver NPC shop buy: store list id u32 @12, store item id u32 @16, count u32 @20 ï¿½ bag + MONEY 0x6B.
+  // Soul Saver NPC shop buy: store list id u32 @12, store item id u32 @16, count u32 @20 ’ bag + MONEY 0x6B.
   if (op === 0x03c5 && p.soulSaver && pkt.length >= 24) {
     const buy = storeBuy(pkt.readUInt32LE(12), pkt.readUInt32LE(16), pkt.readUInt32LE(20));
     if (!buy) {
