@@ -157,6 +157,8 @@ import {
   isAvatarJar,
   registerJar,
   avatarLeave,
+  avatarLevel,
+  avatarLevelUpPacket,
   avatarPower,
   avatarSkillsPacket,
   avatarStatePacket,
@@ -2957,8 +2959,9 @@ async function ssAvatarSpirit(p: Player): Promise<void> {
   if (!r.leveled) return;
   await sendSsStatBundle(p);
   send(p, avatarSkillsPacket(p.charId));
+  broadcastMap(p.map, p.region, avatarLevelUpPacket(p.charId, avatarLevel(p.charId))); // new avatar look
   sendVital(p);
-  console.log(`[field] avatar char=${p.charId} level up -> ${avatarInfoPacket(p.charId).readUInt16LE(0x16)}`);
+  console.log(`[field] avatar char=${p.charId} level up -> ${avatarLevel(p.charId)}`);
 }
 
 /**

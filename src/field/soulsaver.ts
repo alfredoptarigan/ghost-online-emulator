@@ -7,7 +7,7 @@
 import { config } from "../config.js";
 import { getTrade } from "./trade.js";
 import { ssJobBytes } from "./ssjob.js";
-import { avatarLevel, avatarSkills, jarSkills } from "./ssavatar.js";
+import { avatarActive, avatarLevel, avatarSkills, equippedJarItem, jarSkills } from "./ssavatar.js";
 
 /** Base body item (client builds its own preview ENTERPLAYER with this at +0x84). */
 export const SS_DEFAULT_BODY = 9000006;
@@ -98,6 +98,14 @@ function ssEnterPlayer(g: Buffer): Buffer {
   // weapon among them: a Magic User basic attack then carried weapon type 0 and never hit).
   for (const o of [0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf, 0xe0, 0x168, 0x169]) s.writeUInt8(1, o);
   g.copy(s, 0xe6, 206, 216); // peer ip bytes + udp port
+  // Avatar (parser @0x13e8149): transformed flag @0x140 (player+0xE58), avatar level @0x144 (player+0xE50: the client
+  // picks the avatar head/body parts by it, FUN_0137c6f0; 0 left a bare black silhouette), -1 @0x148 (player+0xE54,
+  // form of state 3), equipped jar item @0x14C (official 8843901 BlackSpiritJar, 0 none).
+  const cid = g.readUInt32LE(12);
+  s.writeUInt8(avatarActive(cid) ? 1 : 0, 0x140);
+  s.writeUInt32LE(avatarLevel(cid), 0x144);
+  s.writeInt32LE(-1, 0x148);
+  s.writeUInt32LE(equippedJarItem(cid) >>> 0, 0x14c);
   return s;
 }
 

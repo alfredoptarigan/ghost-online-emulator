@@ -413,6 +413,25 @@ function equippedJar(charId: number): { base: number; lv: number } | null {
   return base && jar ? { base, lv: jar.lv } : null;
 }
 
+/** Item id of the equipped jar, 0 for none (ENTERPLAYER +0x14C). */
+export function equippedJarItem(charId: number): number {
+  const av = avatars.get(charId);
+  return av?.jars[av.jarEq]?.item ?? 0;
+}
+
+/**
+ * S 0x25F (20 B, FUN_012ba5b0): charId u32 @12, avatar level i16 @0x10, i16 @0x12 (official 0). Official on every
+ * avatar level up (capture day1_stage1 t=2746.., private_test2). The client sets player+0xE50 = level, plays
+ * gh_up.wav and rebuilds the avatar look (FUN_0137c6f0 picks the head/body parts by level, 1-5, 6-10, ...).
+ */
+export function avatarLevelUpPacket(charId: number, level: number): Buffer {
+  const b = Buffer.alloc(20, 0);
+  writeHeader(b, 0x025f, 20);
+  b.writeUInt32LE(charId >>> 0, 12);
+  b.writeInt16LE(level, 0x10);
+  return b;
+}
+
 /** Unlocked attack skills of the equipped jar (x1..x7) as [skill, level] for skill book 0. */
 export function jarSkills(charId: number): Array<[number, number]> {
   const j = equippedJar(charId);
