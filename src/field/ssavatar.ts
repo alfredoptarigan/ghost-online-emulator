@@ -298,14 +298,6 @@ export function avatarTailPackets(): Buffer[] {
   return [p739, p3d6, p73f];
 }
 
-/** Official avatar-mode quickslot: all 24 entries empty (-1) and the trailing byte @204 = 1 (208 B, SS layout). */
-export function avatarQuickSlotPacket(): Buffer {
-  const b = Buffer.alloc(208, 0xff);
-  writeHeader(b, 0x00a9, 208);
-  b.writeUInt32LE(1, 204);
-  return b;
-}
-
 /** S 0x2DB (20 B, zeros), sent by the official server after a cancel. */
 export function avatarCancelTailPacket(): Buffer {
   const b = Buffer.alloc(20, 0);

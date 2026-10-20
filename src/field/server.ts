@@ -129,12 +129,21 @@ import { storeBuy } from "./npcstore.js";
 import { loadPhantoms, phantomMuls, unsealItem } from "./phantom.js";
 import { refreshSsJob } from "./ssjob.js";
 import { learnSkill, learnResultPacket } from "./sslearn.js";
-import { ssAttr, ssMaxLevel, ssSkill, ssSkillClients, ssSkillCost, ssSkillHeal, ssSyncJobSkills } from "./ssskills.js";
+import {
+  grantSsAvatarWeapon,
+  ssAttr,
+  ssMaxLevel,
+  ssSkill,
+  ssSkillClients,
+  ssSkillCost,
+  ssSkillHeal,
+  ssSyncJobSkills,
+} from "./ssskills.js";
 import { beltAbsorb, beltCheckWorn, beltDecay, beltExpMul, beltPacket, beltReset, rewardExp } from "./belt.js";
 import { expireSsBuffs, isSsBuffItem, loadSsBuffs, ssRecover, ssUse, ssUseVisual, startSsBuff } from "./ssuse.js";
 import { ssPortal } from "./ssportal.js";
 import { recomputeSsStats, refreshSsWeapon, isSsChar, ssExpForLevel, SS_STAT_POINTS_PER_LEVEL, SS_SKILL_POINTS_PER_LEVEL } from "./ssstats.js";
-import { buildQuickSlotAll, saveQuickSlot } from "./hotkeys.js";
+import { AVATAR_KEY_PREFIX, buildAvatarQuickSlot, buildQuickSlotAll, saveQuickSlot } from "./hotkeys.js";
 import {
   avatarActive,
   avatarCancelTailPacket,
@@ -148,7 +157,6 @@ import {
   registerJar,
   avatarLeave,
   avatarPower,
-  avatarQuickSlotPacket,
   avatarSkillsPacket,
   avatarStatePacket,
   avatarTailPackets,
@@ -2256,6 +2264,10 @@ async function runGmCommand(p: Player, cmdRaw: string): Promise<void> {
     if (target < 1) target = 1;
     if (target > 99) target = 99;
     const old = p.level;
+    if (await isSsChar(p.charId)) {
+      await ssGmLevel(p, target);
+      return;
+    }
     let mexp = 30;
     for (let lv = 1; lv < target; lv++) mexp = Math.floor(mexp * rates.levelExpCurve);
     if (mexp < 1) mexp = 30;
@@ -2742,6 +2754,7 @@ async function ssLevelUpRewards(p: Player, fromLevel: number, toLevel: number): 
   if (Math.floor(fromLevel / 10) !== Math.floor(toLevel / 10)) {
     // Official lv10: both basic avatar jars; every 10 levels the max jar level (S 0x265 @0x0D) rises.
     await grantStartJars(p.charId, toLevel);
+    await grantSsAvatarWeapon(p.charId, toLevel);
     send(p, avatarJarsPacket(p.charId, toLevel));
     send(p, await buildSkillAll(p.charId)); // jar skill level
   }
@@ -2895,7 +2908,7 @@ async function handleAvatar(p: Player, step: number): Promise<void> {
     await setAvatarState(p.charId, 2);
     await sendSsStatBundle(p);
     broadcastMap(p.map, p.region, avatarStatePacket(p.charId, 2));
-    send(p, avatarQuickSlotPacket());
+    send(p, await buildAvatarQuickSlot(p.charId));
     send(p, avatarSkillsPacket(p.charId));
     sendVital(p);
     clearAvatarTimer(p.charId);
@@ -2945,6 +2958,39 @@ async function ssAvatarSpirit(p: Player): Promise<void> {
   send(p, avatarSkillsPacket(p.charId));
   sendVital(p);
   console.log(`[field] avatar char=${p.charId} level up -> ${avatarInfoPacket(p.charId).readUInt16LE(0x16)}`);
+}
+
+/**
+ * GM //level for a Soul Saver character, same rules as a real level up (grantMonsterExp): tb_Exp curve, EXP 0,
+ * +4 stat / +2 skill points per level gained, stats recomputed and HP/MP refilled, lv10 jars + AvatarWeapon and the
+ * level-up gifts. The Ghost path gave +5 stat points, the Ghost EXP curve and left HP/MP and the jars alone.
+ */
+async function ssGmLevel(p: Player, target: number): Promise<void> {
+  const old = p.level;
+  const gained = Math.max(0, target - old);
+  p.level = target;
+  p.exp = 0;
+  p.mexp = ssExpForLevel(target) || p.mexp;
+  await execute("UPDATE characters SET level=?, mexp=?, exp=0, st_point=st_point+?, sk_point=sk_point+? WHERE ID=?", [
+    target,
+    p.mexp,
+    gained * SS_STAT_POINTS_PER_LEVEL,
+    gained * SS_SKILL_POINTS_PER_LEVEL,
+    p.charId,
+  ]);
+  send(p, levelUpPacket(p.charId, p.level));
+  broadcastMap(p.map, p.region, levelUpPacket(p.charId, p.level), p.charId);
+  send(p, lvExpPacket(p.level, p.exp));
+  if (await applySsStats(p)) {
+    p.hp = p.maxHp;
+    p.mp = p.maxMp;
+    await execute("UPDATE characters SET chp=?, cmp=? WHERE ID=?", [p.hp, p.mp, p.charId]);
+  }
+  send(p, await charAll(p.charId));
+  send(p, await buildSkillAll(p.charId));
+  sendVital(p);
+  await ssLevelUpRewards(p, old, target);
+  console.log(`[field] GM level char=${p.charId} lv${old}->${target} mexp=${p.mexp} hp=${p.maxHp} mp=${p.maxMp}`);
 }
 
 /** Soul Saver characters: recompute HP/MP/attack/def from the client job tables and refresh the live player. */
@@ -3199,6 +3245,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     if (p.soulSaver) send(p, avatarInfoPacket(p.charId)); // official login: 0x263 avatar level/EXP/power
     if (p.soulSaver) {
       await grantStartJars(p.charId, p.level); // characters already past lv10 before jars existed here
+      await grantSsAvatarWeapon(p.charId, p.level);
       send(p, avatarJarsPacket(p.charId, p.level)); // S 0x265 avatar jar list ("Avatar Spirit" window)
     }
     send(p, await buildSkillAll(p.charId));
@@ -3929,7 +3976,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     send(p, await buildSkillAll(p.charId));
     send(p, avatarCancelTailPacket());
     await sendSsStatBundle(p);
-    if (avatarActive(p.charId)) send(p, avatarQuickSlotPacket());
+    if (avatarActive(p.charId)) send(p, await buildAvatarQuickSlot(p.charId));
     send(p, avatarJarsPacket(p.charId, p.level));
     broadcastMap(p.map, p.region, avatarJarEquipPacket(p.charId, item, idx));
     return;
@@ -4138,8 +4185,16 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
 
   // hotkeys
   if (op === 0x00a8) {
-    // The avatar hotkey bar is a separate, empty bar (official 0xA9 all -1); do not overwrite the normal one.
-    if (p.soulSaver && avatarActive(p.charId)) return;
+    // The avatar hotkey bar is a separate bar (official 0xA9 while transformed); keep it apart from the normal one.
+    if (p.soulSaver && avatarActive(p.charId)) {
+      try {
+        await saveQuickSlot(p.charId, pkt, AVATAR_KEY_PREFIX);
+        send(p, await buildAvatarQuickSlot(p.charId));
+      } catch (e) {
+        console.error("[field] avatar quickslot save failed", e);
+      }
+      return;
+    }
     try {
       await saveQuickSlot(p.charId, pkt);
       send(p, await buildQuickSlotAll(p.charId));
@@ -4176,7 +4231,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     return;
   }
 
-  // Soul Saver Novice Gift (Aeri Elder "Challenge! Receive Gift"): C 0x1D9 u32 2 ’ item 8846411 once per character.
+  // Soul Saver Novice Gift (Aeri Elder "Challenge! Receive Gift"): C 0x1D9 u32 2 ï¿½ item 8846411 once per character.
   if (op === 0x01d9 && p.soulSaver) {
     if (await claimNoviceGift(p.charId)) await giveGifts(p, [{ itemId: NOVICE_GIFT, count: 1, tab: 3 }]);
     return;
@@ -4192,7 +4247,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     return;
   }
 
-  // Soul Saver select box choice: spend slot u32 @12, choice index u32 @16, chosen item u32 @20 ’ S 0x2ED.
+  // Soul Saver select box choice: spend slot u32 @12, choice index u32 @16, chosen item u32 @20 ï¿½ S 0x2ED.
   if (op === 0x02ef && p.soulSaver && pkt.length >= 24) {
     const slot = pkt.readUInt32LE(12);
     const chosen = pkt.readUInt32LE(20);
@@ -4211,7 +4266,7 @@ async function handlePacket(p: Player, pkt: Buffer): Promise<void> {
     return;
   }
 
-  // Soul Saver NPC shop buy: store list id u32 @12, store item id u32 @16, count u32 @20 ’ bag + MONEY 0x6B.
+  // Soul Saver NPC shop buy: store list id u32 @12, store item id u32 @16, count u32 @20 ï¿½ bag + MONEY 0x6B.
   if (op === 0x03c5 && p.soulSaver && pkt.length >= 24) {
     const buy = storeBuy(pkt.readUInt32LE(12), pkt.readUInt32LE(16), pkt.readUInt32LE(20));
     if (!buy) {

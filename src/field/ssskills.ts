@@ -22,6 +22,7 @@ import type { RowDataPacket } from "mysql2";
 import { config } from "../config.js";
 import { query, execute } from "../db.js";
 import { writeHeader } from "../net/packet.js";
+import { avatarLevel, avatarSkills, jarSkills } from "./ssavatar.js";
 
 export type SsSkill = {
   n: string;
@@ -50,9 +51,22 @@ export function ssSkill(id: number): SsSkill | undefined {
   return table[id];
 }
 
+/** AvatarWeapon: common skill 5, given with the avatar jars at lv10 (skill.skl max 0; Mamluk shows 1/20). */
+export const SS_AVATAR_WEAPON = 5;
+
 export function ssMaxLevel(id: number): number {
+  if (id === SS_AVATAR_WEAPON) return 20;
   const s = table[id];
   return s && s.max > 0 ? s.max : 1;
+}
+
+/** Official lv10: AvatarWeapon appears in book 0 at level 1 (capture day1_stage1 t=899). */
+export async function grantSsAvatarWeapon(charId: number, charLevel: number): Promise<boolean> {
+  if (charLevel < 10) return false;
+  const rows = await query<RowDataPacket[]>("SELECT id FROM skills WHERE charid=? AND skillid=?", [charId, SS_AVATAR_WEAPON]);
+  if (rows.length) return false;
+  await execute("INSERT INTO skills (charid, skillid, points) VALUES (?,?,1)", [charId, SS_AVATAR_WEAPON]);
+  return true;
 }
 
 /** Attribute value at a skill level (1-based); 0 when the skill has no such attribute. */
@@ -71,8 +85,6 @@ export function ssBook(id: number): number {
 }
 
 const BOOK_SLOTS = [10, 20, 10, 20, 10];
-const AVATAR_A = [101, 102, 104];
-const AVATAR_B = [105];
 const COMBOS = [3012, 3013, 3014, 3015, 3016, 3017];
 
 type Row = { id: number; skillid: number; points: number };
@@ -116,13 +128,26 @@ export async function buildSsSkillAll(charId: number): Promise<Buffer> {
       s.writeUInt8(Math.min(255, r.points), lv2 + i);
     });
   });
-  AVATAR_A.forEach((id, i) => {
+  // Equipped avatar jar: its unlocked attack skills (DarkBall 3011 / WhiteBall 2011, ...) follow the common skills
+  // in book 0 (official t=7603: 1..5 then 2011; Mamluk: 1..5 then 3011). Without them the client never casts the
+  // jar skill from the avatar hotkey bar (book type 7).
+  let n0 = books[0]!.length;
+  for (const [id, lv] of jarSkills(charId)) {
+    if (n0 >= BOOK_SLOTS[0]!) break;
+    s.writeInt16LE(id, 0x0c + 2 * n0);
+    s.writeUInt8(lv, 0x20 + n0);
+    s.writeUInt8(lv, 0x2a + n0);
+    n0++;
+  }
+  // Avatar skills grow with the avatar level (official DoubleLeap 107 from L3, Regenerate 103 from L6).
+  const av = avatarSkills(avatarLevel(charId));
+  av.a.forEach(([id, lv], i) => {
     s.writeUInt32LE(id, 0x160 + 4 * i);
-    s.writeUInt8(1, 0x188 + i);
+    s.writeUInt8(lv, 0x188 + i);
   });
-  AVATAR_B.forEach((id, i) => {
+  av.b.forEach(([id, lv], i) => {
     s.writeUInt32LE(id, 0x194 + 4 * i);
-    s.writeUInt8(1, 0x1bc + i);
+    s.writeUInt8(lv, 0x1bc + i);
   });
   COMBOS.forEach((id, i) => {
     s.writeUInt32LE(id, 0x218 + 4 * i);
@@ -180,7 +205,7 @@ export async function ssSyncJobSkills(charId: number, job: number, faction: numb
   const have = new Set<number>();
   for (const r of rows) {
     const sid = Number(r.skillid);
-    if (!keep.has(sid)) await execute("DELETE FROM skills WHERE id=?", [r.id]);
+    if (!keep.has(sid) && sid !== SS_AVATAR_WEAPON) await execute("DELETE FROM skills WHERE id=?", [r.id]);
     else have.add(sid);
   }
   for (const sid of keep) if (!have.has(sid)) await execute("INSERT INTO skills (charid, skillid, points) VALUES (?,?,1)", [charId, sid]);

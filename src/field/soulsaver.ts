@@ -60,6 +60,13 @@ function ssCharAll(g: Buffer, charId: number): Buffer {
   s.writeUInt16LE(g.readUInt16LE(116), 0xa2); // skill points
   for (let i = 0; i < 6; i++) s.writeUInt16LE(g.readUInt16LE(118 + i * 2), 0xa4 + i * 2); // bonus str..damw
   s.writeUInt16LE(g.readUInt16LE(130), 0xb2); // bonus def
+  // Constants of every official 0x50 (lv1-35, normal and avatar mode; Mamluk too): 0xFF @0x3B/@0x3C, the skin item
+  // @0x40 (official 9000006 = worn slot 23, Avatar_skin.csp), 1000 @0xBC, 10 @0xC0. These were sent as 0.
+  s.writeUInt8(0xff, 0x3b);
+  s.writeUInt8(0xff, 0x3c);
+  s.writeUInt32LE(SS_DEFAULT_BODY, 0x40);
+  s.writeUInt32LE(1000, 0xbc);
+  s.writeUInt32LE(10, 0xc0);
   return s;
 }
 
