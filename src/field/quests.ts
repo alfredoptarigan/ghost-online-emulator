@@ -105,6 +105,8 @@ type SsQuest = {
   fame?: number;
   items?: Array<[number, number]>;
   skills?: number[];
+  /** Mid-quest NPC steps (quest.luc requstItem/deleteItem meetcnt, re-tools/quest_meets.js): C 0x7D stage n. */
+  meet?: Record<string, { give?: Array<[number, number]>; take?: Array<[number, number]> }>;
 };
 
 const SS_QUESTS: Record<number, SsQuest> = (() => {
@@ -200,6 +202,52 @@ async function getRow(cid: number, qid: number): Promise<RowDataPacket | null> {
     [cid, qid],
   );
   return rows[0] ?? null;
+}
+
+let meetsColumn: Promise<unknown> | null = null;
+/** quests.meets = bitmask of mid-quest meet steps already done (C 0x7D repeats the same stage). */
+function ensureMeetsColumn(): Promise<unknown> {
+  meetsColumn ??= execute("ALTER TABLE quests ADD COLUMN IF NOT EXISTS meets int NOT NULL DEFAULT 0");
+  return meetsColumn;
+}
+
+async function countItem(cid: number, itemId: number): Promise<number> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT (SELECT COALESCE(SUM(amount),0) FROM spend WHERE charid=? AND itemid=?)
+          + (SELECT COALESCE(SUM(amount),0) FROM other WHERE charid=? AND type=?)
+          + (SELECT COUNT(*) FROM equip WHERE charid=? AND type=?) AS n`,
+    [cid, itemId, cid, itemId, cid, itemId],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * Soul Saver mid-quest step at meetNpc[stage]: e.g. quest 60/64 at the Dusk Castle Doctor (stage 1) takes 15 Wild
+ * Ginseng and gives the Faction Referral that Haran asks for at turn-in. Runs once per quest acceptance, and only
+ * when every item to take is in the bag.
+ */
+async function applyMeetStep(cid: number, rowId: number, questId: number, stage: number): Promise<Buffer[]> {
+  const step = SS_QUESTS[questId]?.meet?.[String(stage)];
+  if (!step || stage < 1 || stage > 30) return [];
+  await ensureMeetsColumn();
+  const rows = await query<RowDataPacket[]>("SELECT meets FROM quests WHERE id=?", [rowId]);
+  const bit = 1 << stage;
+  if (Number(rows[0]?.meets ?? 0) & bit) return [];
+  for (const [iid, n] of step.take ?? []) {
+    if ((await countItem(cid, iid)) < n) {
+      console.log(`[quest] char=${cid} quest=${questId} meet ${stage}: missing item ${iid} x${n}`);
+      return [];
+    }
+  }
+  const out: Buffer[] = [];
+  for (const [iid, n] of step.take ?? []) out.push(...(await removeItemById(cid, iid, n)));
+  for (const [iid, n] of step.give ?? []) {
+    const bag = await addItemToInventory(cid, iid, n);
+    if (bag >= 0) out.push(...(await refreshBagPackets(cid, bag)));
+  }
+  await execute("UPDATE quests SET meets = meets | ? WHERE id=?", [bit, rowId]);
+  console.log(`[quest] char=${cid} quest=${questId} meet ${stage}: take ${JSON.stringify(step.take ?? [])} give ${JSON.stringify(step.give ?? [])}`);
+  return out;
 }
 
 async function removeItemById(cid: number, itemId: number, qty: number): Promise<Buffer[]> {
@@ -395,7 +443,8 @@ export async function acceptQuest(cid: number, level: number, questId: number, s
   if (existing) {
     const st = Number(existing.questState);
     if (st === 0x31 || st === 0x32) return [await buildQuestAll(cid, ss)];
-    await execute("UPDATE quests SET state=49, progress=0 WHERE id=?", [existing.id]);
+    await ensureMeetsColumn();
+    await execute("UPDATE quests SET state=49, progress=0, meets=0 WHERE id=?", [existing.id]);
   } else {
     await execute("INSERT INTO quests (charid, questid, state, progress) VALUES (?,?,49,0)", [cid, questId]);
   }
@@ -498,7 +547,8 @@ export async function handleQuestPacket(
     // Only answer for an active quest: the client sends 0x7D again when talking to the NPC after the turn-in,
     // and a QUEST_UPDATE with state 1 re-opened the finished quest in the Quest Alert.
     if (!row || Number(row.questState) !== 0x31) return { packets: [], refreshChar: false };
-    return { packets: [questUpdate(Number(row.completeMonster), questId, 1, stage & 0xff)], refreshChar: false };
+    const stepPkts = ss && !useLegacy(questId, ss) ? await applyMeetStep(cid, Number(row.id), questId, stage & 0xff) : [];
+    return { packets: [...stepPkts, questUpdate(Number(row.completeMonster), questId, 1, stage & 0xff)], refreshChar: false };
   }
   if (opcode === 0x007f) {
     const row = await getRow(cid, qid);
